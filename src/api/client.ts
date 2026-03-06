@@ -27,6 +27,7 @@ export interface DeployResult {
 export interface Website {
   websiteId: string;
   fileName: string;
+  name?: string;
   url: string;
   path: string;
   createdAt: string;
@@ -282,11 +283,27 @@ export class DemoxClient {
   }
 
   /**
+   * 将 MySQL 字段名映射为 camelCase
+   */
+  private mapMySQLToCamelCase(row: any): Website {
+    return {
+      websiteId: row.website_id || row.websiteId || "",
+      fileName: row.file_name || row.fileName || "",
+      name: row.name || row.file_name || row.fileName || "",
+      path: row.path || "",
+      url: row.url || "",
+      createdAt: row.created_at || row.createdAt || "",
+      updatedAt: row.updated_at || row.updatedAt || "",
+    };
+  }
+
+  /**
    * 列出所有网站
    */
   async listWebsites(accessToken: string): Promise<Website[]> {
     const result = await this.callApi("/websites", { action: "list" }, accessToken);
-    return result.files || result.websites || [];
+    const rawWebsites = result.files || result.websites || [];
+    return rawWebsites.map((w: any) => this.mapMySQLToCamelCase(w));
   }
 
   /**

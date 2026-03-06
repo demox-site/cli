@@ -1,6 +1,6 @@
 {
   "name": "@demox-site/cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Demox CLI - Deploy static websites from command line",
   "main": "./dist/index.js",
   "type": "module",
