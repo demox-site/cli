@@ -34,6 +34,13 @@ export class OAuthManager {
    * 确保已认证
    */
   async ensureAuthenticated(): Promise<string> {
+    // CI/非交互环境：直接用环境变量里的长期 token，跳过 OAuth 与本地文件
+    const envToken = process.env.DEMOX_TOKEN;
+    if (envToken && envToken.trim()) {
+      logger.debug("使用 DEMOX_TOKEN 环境变量中的 Token");
+      return envToken.trim();
+    }
+
     const tokenData = await this.loadToken();
 
     if (tokenData && !this.isTokenExpired(tokenData)) {
