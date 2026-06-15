@@ -49,10 +49,10 @@ demox list
 # 查看网站详情
 demox info WEBSITE_ID
 
-# 设置自定义子域名
+# 设置自定义子域名（5-63 位）
 demox domain set WEBSITE_ID my-demo
 
-# 检查 / 清除自定义子域名
+# 检查 / 清除自定义子域名（5-63 位）
 demox domain check my-demo
 demox domain clear WEBSITE_ID
 
@@ -70,8 +70,8 @@ demox delete WEBSITE_ID
 | `demox deploy <path>` | 部署网站、目录、PDF 或文档 |
 | `demox list` / `demox ls` | 列出所有网站 |
 | `demox info <id>` | 查看网站详情 |
-| `demox domain check <subdomain>` | 检查自定义子域名前缀是否可用 |
-| `demox domain set <id> <subdomain>` | 设置自定义子域名前缀 |
+| `demox domain check <subdomain>` | 检查自定义子域名前缀是否可用，长度 5-63 位 |
+| `demox domain set <id> <subdomain>` | 设置自定义子域名前缀，长度 5-63 位 |
 | `demox domain clear <id>` | 清除自定义子域名前缀 |
 | `demox delete <id>` / `demox rm <id>` | 删除网站 |
 | `demox test` | 测试服务连接 |
@@ -100,10 +100,12 @@ Token 保存在 `~/.demox/token.json`。
 | 变量 | 描述 | 默认值 |
 |------|------|--------|
 | `DEMOX_CLIENT_ID` | OAuth 客户端 ID | `demox-mcp-client` |
-| `DEMOX_AUTH_URL` | 授权 URL | `https://demox.site/#/mcp-authorize` |
-| `DEMOX_API_BASE` | API 基础 URL | `https://demox.site` |
-| `DEMOX_CLOUD_FUNCTION_URL` | 云函数 URL | (腾讯云 SCF) |
-| `DEMOX_WEBSITE_API_URL` | 网站管理 API URL（自定义域名等） | (腾讯云 SCF) |
+| `DEMOX_SITE_URL` | Demox 站点 URL，用于生成授权入口 | 必填 |
+| `DEMOX_API_URL` | 后端 API 统一入口 | 必填 |
+| `DEMOX_AUTH_URL` | 授权 URL；不填时由 `DEMOX_SITE_URL` 生成 | 可选 |
+| `DEMOX_API_BASE` | API 基础 URL；不填时使用 `DEMOX_SITE_URL` | 可选 |
+| `DEMOX_CLOUD_FUNCTION_URL` | 部署/API 代理入口；不填时使用 `DEMOX_API_URL` | 可选 |
+| `DEMOX_WEBSITE_API_URL` | 网站管理 API URL；不填时使用 `DEMOX_API_URL` | 可选 |
 
 ## 限制
 

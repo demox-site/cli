@@ -335,7 +335,7 @@ program
  */
 const domainCommand = program
   .command("domain")
-  .description("管理自定义子域名（<subdomain>.demox.site）");
+  .description("管理自定义子域名（5-63 位，<subdomain>.demox.site）");
 
 domainCommand
   .command("check <subdomain>")
