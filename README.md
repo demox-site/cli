@@ -6,10 +6,10 @@
 
 ```bash
 # 使用 npm
-npm install -g github:demox-site/cli#main
+npm install -g @demox-site/cli@latest
 
 # 使用 npx (无需安装)
-npx github:demox-site/cli#main --help
+npx @demox-site/cli@latest --help
 ```
 
 ## 快速开始
