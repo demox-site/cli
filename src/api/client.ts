@@ -4,6 +4,12 @@
 
 import { loadConfig } from "../utils/config.js";
 import { logger } from "../utils/logger.js";
+import {
+  buildDocumentSiteZip,
+  buildPdfSiteZip,
+  isSupportedDocPath,
+  isSupportedPdfPath,
+} from "../utils/site-packager.js";
 
 export class AuthError extends Error {
   constructor(message: string) {
@@ -16,12 +22,17 @@ export interface DeployParams {
   zipFile: string;
   websiteId?: string;
   fileName: string;
+  templateId?: string;
 }
 
 export interface DeployResult {
   url: string;
   websiteId: string;
   path: string;
+  defaultUrl?: string;
+  customUrl?: string | null;
+  preferredUrl?: string;
+  cachePurge?: unknown;
 }
 
 export interface Website {
@@ -30,16 +41,37 @@ export interface Website {
   name?: string;
   url: string;
   path: string;
+  subdomain?: string | null;
+  defaultUrl?: string;
+  customUrl?: string | null;
+  preferredUrl?: string;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface DomainCheckResult {
+  success: boolean;
+  available: boolean;
+  reason?: string;
+  message?: string;
+}
+
+export interface DomainResult {
+  success: boolean;
+  subdomain?: string;
+  url?: string;
+  message?: string;
+  code?: string;
+}
+
 export class DemoxClient {
   private apiUrl: string;
+  private websiteApiUrl: string;
 
   constructor() {
     const config = loadConfig();
     this.apiUrl = config.cloudFunctionUrl;
+    this.websiteApiUrl = config.websiteApiUrl;
   }
 
   /**
@@ -48,7 +80,8 @@ export class DemoxClient {
   private async callApi(
     path: string,
     data: Record<string, any>,
-    accessToken: string
+    accessToken: string,
+    baseUrl = this.apiUrl
   ): Promise<any> {
     const https = await import("https");
     const urlModule = await import("url");
@@ -56,7 +89,7 @@ export class DemoxClient {
     try {
       logger.debug(`调用 API: ${path}`);
 
-      const urlObj = new urlModule.URL(this.apiUrl + path);
+      const urlObj = new urlModule.URL(baseUrl + path);
       const requestBodyStr = JSON.stringify(data);
 
       const responseData = await new Promise<any>((resolve, reject) => {
@@ -113,6 +146,11 @@ export class DemoxClient {
           throw new AuthError("Token 已过期或无效，需要重新登录");
         }
 
+        if (responseData.data && typeof responseData.data === "object" && responseData.data.message) {
+          const code = responseData.data.code ? `[${responseData.data.code}] ` : "";
+          throw new Error(`${code}${responseData.data.message}`);
+        }
+
         throw new Error(`HTTP ${responseData.status}: ${errorText}`);
       }
 
@@ -134,6 +172,10 @@ export class DemoxClient {
         throw new Error(
           `[${error.code}] ${error.message}${error.suggestion ? `\n建议：${error.suggestion}` : ""}`
         );
+      }
+
+      if (responseData.data && responseData.data.success === false) {
+        throw new Error(responseData.data.message || "请求失败");
       }
 
       return responseData.data;
@@ -175,8 +217,18 @@ export class DemoxClient {
         localFilePath = await this.zipDirectoryToFile(params.zipFile);
       } else if (params.zipFile.toLowerCase().endsWith(".zip")) {
         localFilePath = params.zipFile;
+      } else if (isSupportedPdfPath(params.zipFile)) {
+        logger.debug(`检测到 PDF: ${params.zipFile}，正在生成预览站点...`);
+        const converted = await buildPdfSiteZip(params.zipFile);
+        localFilePath = converted.zipFilePath;
+        logger.info(`PDF 已转换为站点: ${converted.title}`);
+      } else if (isSupportedDocPath(params.zipFile)) {
+        logger.debug(`检测到文档: ${params.zipFile}，正在生成网页站点...`);
+        const converted = await buildDocumentSiteZip(params.zipFile, params.templateId);
+        localFilePath = converted.zipFilePath;
+        logger.info(`文档已转换为站点: ${converted.title}`);
       } else {
-        throw new Error(`不支持的文件类型，仅支持 .zip 文件或目录`);
+        throw new Error(`不支持的文件类型，仅支持目录、.zip、.pdf、.md、.txt、.docx 文件`);
       }
     }
 
@@ -197,6 +249,7 @@ export class DemoxClient {
     const result = await this.callApi(
       "/deploy",
       {
+        action: "upload_and_deploy",
         fileContentBase64,
         fileName: params.fileName,
         websiteId,
@@ -282,16 +335,35 @@ export class DemoxClient {
     return tempFile;
   }
 
+  private buildDefaultUrl(websiteId: string): string {
+    return websiteId ? `https://${websiteId.toLowerCase()}.demox.site/` : "";
+  }
+
+  private buildCustomUrl(subdomain?: string | null): string | null {
+    const label = (subdomain || "").trim().toLowerCase();
+    return label ? `https://${label}.demox.site/` : null;
+  }
+
   /**
    * 将 MySQL 字段名映射为 camelCase
    */
   private mapMySQLToCamelCase(row: any): Website {
+    const websiteId = row.website_id || row.websiteId || "";
+    const subdomain = row.subdomain || null;
+    const defaultUrl = row.defaultUrl || row.default_url || this.buildDefaultUrl(websiteId);
+    const customUrl = row.customUrl || row.custom_url || this.buildCustomUrl(subdomain);
+    const preferredUrl = row.preferredUrl || row.preferred_url || customUrl || defaultUrl || row.url || "";
+
     return {
-      websiteId: row.website_id || row.websiteId || "",
+      websiteId,
       fileName: row.file_name || row.fileName || "",
       name: row.name || row.file_name || row.fileName || "",
       path: row.path || "",
-      url: row.url || "",
+      url: preferredUrl,
+      subdomain,
+      defaultUrl,
+      customUrl,
+      preferredUrl,
       createdAt: row.created_at || row.createdAt || "",
       updatedAt: row.updated_at || row.updatedAt || "",
     };
@@ -320,5 +392,43 @@ export class DemoxClient {
   async getWebsite(websiteId: string, accessToken: string): Promise<Website | null> {
     const websites = await this.listWebsites(accessToken);
     return websites.find((w) => w.websiteId === websiteId) || null;
+  }
+
+  async checkSubdomain(
+    subdomain: string,
+    accessToken: string,
+    websiteId?: string
+  ): Promise<DomainCheckResult> {
+    return await this.callApi(
+      "/website/check-subdomain",
+      { action: "check_subdomain", subdomain, websiteId },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
+
+  async setSubdomain(
+    websiteId: string,
+    subdomain: string,
+    accessToken: string
+  ): Promise<DomainResult> {
+    return await this.callApi(
+      "/website/set-subdomain",
+      { action: "set_subdomain", websiteId, subdomain },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
+
+  async clearSubdomain(
+    websiteId: string,
+    accessToken: string
+  ): Promise<DomainResult> {
+    return await this.callApi(
+      "/website/clear-subdomain",
+      { action: "clear_subdomain", websiteId },
+      accessToken,
+      this.websiteApiUrl
+    );
   }
 }

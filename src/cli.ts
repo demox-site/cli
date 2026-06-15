@@ -8,8 +8,9 @@ import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
 import { existsSync, promises as fs } from "fs";
+import pathModule from "path";
 import { OAuthManager, TokenData } from "./auth/oauth.js";
-import { DemoxClient, AuthError } from "./api/client.js";
+import { DemoxClient, AuthError, type Website } from "./api/client.js";
 import { getTokenPath, getConfigDir } from "./utils/config.js";
 import { logger } from "./utils/logger.js";
 
@@ -18,7 +19,14 @@ const program = new Command();
 program
   .name("demox")
   .description("Demox CLI - 部署静态网站到云端")
-  .version("1.0.0");
+  .version("1.1.0");
+
+function printWebsiteUrlLines(site: Website, indent = "   ") {
+  console.log(chalk.blue(`${indent}URL: ${site.url}`));
+  if (site.customUrl && site.defaultUrl && site.customUrl !== site.defaultUrl) {
+    console.log(chalk.gray(`${indent}默认域名: ${site.defaultUrl}`));
+  }
+}
 
 /**
  * 登录命令
@@ -138,7 +146,7 @@ program
         const createdDate = new Date(site.createdAt).toLocaleString("zh-CN");
         console.log(chalk.bold(`${index + 1}. ${site.fileName}`));
         console.log(chalk.gray(`   ID: ${site.websiteId}`));
-        console.log(chalk.blue(`   URL: ${site.url}`));
+        printWebsiteUrlLines(site);
         console.log(chalk.gray(`   创建时间: ${createdDate}\n`));
       });
 
@@ -155,9 +163,10 @@ program
  */
 program
   .command("deploy <path>")
-  .description("部署网站或目录")
+  .description("部署网站、目录、PDF 或文档")
   .option("-n, --name <name>", "网站名称")
   .option("-i, --id <id>", "网站 ID（更新现有网站）")
+  .option("-t, --template <template>", "文档模板：insight、warm、dark", "insight")
   .action(async (path: string, options) => {
     const oauth = new OAuthManager();
 
@@ -170,14 +179,16 @@ program
       const stat = await fs.stat(path);
       const isDirectory = stat.isDirectory();
       const isZipFile = stat.isFile() && path.endsWith(".zip");
+      const isFile = stat.isFile();
 
       let fileName = options.name;
 
       if (!fileName) {
         if (isDirectory) {
-          fileName = path.split("/").pop() || "unnamed";
-        } else if (isZipFile) {
-          fileName = path.split("/").pop()?.replace(".zip", "") || "unnamed";
+          fileName = pathModule.basename(path) || "unnamed";
+        } else if (isFile) {
+          const parsed = pathModule.parse(path);
+          fileName = parsed.name || (isZipFile ? "website" : "document");
         } else {
           fileName = "unnamed";
         }
@@ -192,6 +203,7 @@ program
           zipFile: path,
           websiteId: options.id,
           fileName,
+          templateId: options.template,
         },
         accessToken
       );
@@ -201,7 +213,11 @@ program
       console.log(chalk.bold("\n📦 网站信息:"));
       console.log(chalk.gray(`  名称: ${fileName}`));
       console.log(chalk.gray(`  ID: ${result.websiteId}`));
-      console.log(chalk.blue(`  URL: ${result.url}\n`));
+      console.log(chalk.blue(`  URL: ${result.url}`));
+      if (result.customUrl && result.defaultUrl && result.customUrl !== result.defaultUrl) {
+        console.log(chalk.gray(`  默认域名: ${result.defaultUrl}`));
+      }
+      console.log("");
 
       process.exit(0);
     } catch (error: any) {
@@ -300,12 +316,104 @@ program
       console.log(chalk.bold(`  名称: ${website.fileName}`));
       console.log(chalk.gray(`  ID: ${website.websiteId}`));
       console.log(chalk.blue(`  URL: ${website.url}`));
+      if (website.customUrl && website.defaultUrl && website.customUrl !== website.defaultUrl) {
+        console.log(chalk.gray(`  默认域名: ${website.defaultUrl}`));
+      }
       console.log(chalk.gray(`  路径: ${website.path}`));
       console.log(chalk.gray(`  创建时间: ${createdDate}`));
       console.log(chalk.gray(`  更新时间: ${updatedDate}\n`));
 
       process.exit(0);
     } catch (error: any) {
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+/**
+ * 自定义域名命令
+ */
+const domainCommand = program
+  .command("domain")
+  .description("管理自定义子域名（<subdomain>.demox.site）");
+
+domainCommand
+  .command("check <subdomain>")
+  .description("检查自定义子域名前缀是否可用")
+  .option("-i, --id <websiteId>", "当前网站 ID（允许检查已绑定到自己的前缀）")
+  .action(async (subdomain: string, options) => {
+    const oauth = new OAuthManager();
+
+    try {
+      const accessToken = await oauth.ensureAuthenticated();
+      const client = new DemoxClient();
+      const result = await client.checkSubdomain(subdomain, accessToken, options.id);
+
+      if (result.available) {
+        console.log(chalk.green(`\n✔ ${subdomain}.demox.site 可用\n`));
+      } else {
+        console.log(chalk.yellow(`\n⚠ ${subdomain}.demox.site 不可用`));
+        if (result.message) console.log(chalk.gray(`  原因: ${result.message}`));
+        console.log("");
+      }
+      process.exit(0);
+    } catch (error: any) {
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+domainCommand
+  .command("set <websiteId> <subdomain>")
+  .description("给网站设置自定义子域名前缀")
+  .action(async (websiteId: string, subdomain: string) => {
+    const oauth = new OAuthManager();
+    const spinner = ora("正在设置自定义域名...").start();
+
+    try {
+      const accessToken = await oauth.ensureAuthenticated();
+      const client = new DemoxClient();
+      const result = await client.setSubdomain(websiteId, subdomain, accessToken);
+
+      if (!result.success) {
+        throw new Error(result.message || "设置失败");
+      }
+
+      spinner.succeed("自定义域名已设置");
+      console.log(chalk.bold("\n🌐 域名信息:"));
+      console.log(chalk.gray(`  网站 ID: ${websiteId}`));
+      console.log(chalk.blue(`  URL: ${result.url || `https://${subdomain}.demox.site/`}`));
+      if (result.message) console.log(chalk.gray(`  提示: ${result.message}`));
+      console.log("");
+      process.exit(0);
+    } catch (error: any) {
+      spinner.fail("设置失败");
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+domainCommand
+  .command("clear <websiteId>")
+  .description("清除网站的自定义子域名前缀")
+  .action(async (websiteId: string) => {
+    const oauth = new OAuthManager();
+    const spinner = ora("正在清除自定义域名...").start();
+
+    try {
+      const accessToken = await oauth.ensureAuthenticated();
+      const client = new DemoxClient();
+      const result = await client.clearSubdomain(websiteId, accessToken);
+
+      if (!result.success) {
+        throw new Error(result.message || "清除失败");
+      }
+
+      spinner.succeed("自定义域名已清除");
+      if (result.message) console.log(chalk.gray(`\n${result.message}\n`));
+      process.exit(0);
+    } catch (error: any) {
+      spinner.fail("清除失败");
       logger.error(error.message);
       process.exit(1);
     }

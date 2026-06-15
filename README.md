@@ -28,8 +28,10 @@ demox login
 # 部署目录
 demox deploy ./dist
 
-# 部署 ZIP 文件
+# 部署 ZIP 文件、PDF 或文档
 demox deploy ./website.zip
+demox deploy ./document.pdf
+demox deploy ./notes.md --template warm
 
 # 指定网站名称
 demox deploy ./dist --name my-website
@@ -47,6 +49,13 @@ demox list
 # 查看网站详情
 demox info WEBSITE_ID
 
+# 设置自定义子域名
+demox domain set WEBSITE_ID my-demo
+
+# 检查 / 清除自定义子域名
+demox domain check my-demo
+demox domain clear WEBSITE_ID
+
 # 删除网站
 demox delete WEBSITE_ID
 ```
@@ -58,9 +67,12 @@ demox delete WEBSITE_ID
 | `demox login` | 登录到 Demox 服务 |
 | `demox logout` | 登出并删除本地 Token |
 | `demox status` | 查看当前登录状态 |
-| `demox deploy <path>` | 部署网站或目录 |
+| `demox deploy <path>` | 部署网站、目录、PDF 或文档 |
 | `demox list` / `demox ls` | 列出所有网站 |
 | `demox info <id>` | 查看网站详情 |
+| `demox domain check <subdomain>` | 检查自定义子域名前缀是否可用 |
+| `demox domain set <id> <subdomain>` | 设置自定义子域名前缀 |
+| `demox domain clear <id>` | 清除自定义子域名前缀 |
 | `demox delete <id>` / `demox rm <id>` | 删除网站 |
 | `demox test` | 测试服务连接 |
 | `demox clean` | 清理本地缓存 |
@@ -70,6 +82,7 @@ demox delete WEBSITE_ID
 ```
 -n, --name <name>    网站名称
 -i, --id <id>        网站 ID（更新现有网站）
+-t, --template <id>  文档模板：insight、warm、dark
 ```
 
 ### delete 选项
@@ -90,11 +103,14 @@ Token 保存在 `~/.demox/token.json`。
 | `DEMOX_AUTH_URL` | 授权 URL | `https://demox.site/#/mcp-authorize` |
 | `DEMOX_API_BASE` | API 基础 URL | `https://demox.site` |
 | `DEMOX_CLOUD_FUNCTION_URL` | 云函数 URL | (腾讯云 SCF) |
+| `DEMOX_WEBSITE_API_URL` | 网站管理 API URL（自定义域名等） | (腾讯云 SCF) |
 
 ## 限制
 
 - 最大文件大小: 8MB
-- 支持的文件类型: ZIP 文件或目录
+- 支持的文件类型: 目录、ZIP、PDF、Markdown、TXT、DOCX
+- 旧版 `.doc` 暂不支持，请另存为 `.docx`
+- 自定义域名格式: `<subdomain>.demox.site`，前缀仅支持小写字母、数字和连字符
 
 ## 许可证
 

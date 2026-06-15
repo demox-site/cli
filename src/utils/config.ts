@@ -10,6 +10,7 @@ export interface DemoxConfig {
   authUrl: string;
   apiBase: string;
   cloudFunctionUrl: string;
+  websiteApiUrl: string;
 }
 
 export function loadConfig(): DemoxConfig {
@@ -20,6 +21,9 @@ export function loadConfig(): DemoxConfig {
     cloudFunctionUrl:
       process.env.DEMOX_CLOUD_FUNCTION_URL ||
       "https://1307257815-ju8ahprgj9.ap-guangzhou.tencentscf.com",
+    websiteApiUrl:
+      process.env.DEMOX_WEBSITE_API_URL ||
+      "https://1307257815-3empxtnzn9.ap-guangzhou.tencentscf.com",
   };
 }
 
