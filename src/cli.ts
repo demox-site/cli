@@ -8,6 +8,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
 import { existsSync, promises as fs } from "fs";
+import { createRequire } from "module";
 import pathModule from "path";
 import { OAuthManager, TokenData } from "./auth/oauth.js";
 import { DemoxClient, AuthError, type Website } from "./api/client.js";
@@ -15,11 +16,13 @@ import { getTokenPath, getConfigDir } from "./utils/config.js";
 import { logger } from "./utils/logger.js";
 
 const program = new Command();
+const require = createRequire(import.meta.url);
+const { version } = require("../package.json") as { version: string };
 
 program
   .name("demox")
   .description("Demox CLI - 部署静态网站到云端")
-  .version("1.1.0");
+  .version(version);
 
 function printWebsiteUrlLines(site: Website, indent = "   ") {
   console.log(chalk.blue(`${indent}URL: ${site.url}`));
