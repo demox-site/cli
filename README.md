@@ -40,7 +40,7 @@ demox deploy ./dist --name my-website
 demox deploy ./dist --id WEBSITE_ID
 ```
 
-### 3. 管理网站
+### 3. 管理网站与项目
 
 ```bash
 # 列出所有网站
@@ -49,11 +49,16 @@ demox list
 # 查看网站详情
 demox info WEBSITE_ID
 
-# 设置自定义子域名（5-63 位）
-demox domain set WEBSITE_ID my-demo
+# 列出所有项目
+demox projects
 
-# 检查 / 清除自定义子域名（5-63 位）
+# 设置官方域名子域名（5-63 位）
+demox domain set WEBSITE_ID my-demo
+demox domain set WEBSITE_ID my-demo --domain vibeme.cn
+
+# 检查 / 清除官方域名子域名（5-63 位）
 demox domain check my-demo
+demox domain check my-demo --domain vibeme.cn
 demox domain clear WEBSITE_ID
 
 # 删除网站
@@ -69,9 +74,10 @@ demox delete WEBSITE_ID
 | `demox status` | 查看当前登录状态 |
 | `demox deploy <path>` | 部署网站、目录、PDF 或文档 |
 | `demox list` / `demox ls` | 列出所有网站 |
+| `demox projects` | 列出所有项目 |
 | `demox info <id>` | 查看网站详情 |
-| `demox domain check <subdomain>` | 检查自定义子域名前缀是否可用，长度 5-63 位 |
-| `demox domain set <id> <subdomain>` | 设置自定义子域名前缀，长度 5-63 位 |
+| `demox domain check <subdomain>` | 检查官方域名子域名前缀是否可用，长度 5-63 位，支持 `--domain vibeme.cn` |
+| `demox domain set <id> <subdomain>` | 设置官方域名子域名前缀，长度 5-63 位，支持 `--domain vibeme.cn` |
 | `demox domain clear <id>` | 清除自定义子域名前缀 |
 | `demox delete <id>` / `demox rm <id>` | 删除网站 |
 | `demox test` | 测试服务连接 |
@@ -82,6 +88,7 @@ demox delete WEBSITE_ID
 ```
 -n, --name <name>    网站名称
 -i, --id <id>        网站 ID（更新现有网站）
+-p, --project <id>   项目 ID（将网站归入指定项目）
 -t, --template <id>  文档模板：insight、warm、dark
 ```
 
@@ -112,7 +119,7 @@ Token 保存在 `~/.demox/token.json`。
 - 最大文件大小: 8MB
 - 支持的文件类型: 目录、ZIP、PDF、Markdown、TXT、DOCX
 - 旧版 `.doc` 暂不支持，请另存为 `.docx`
-- 自定义域名格式: `<subdomain>.demox.site`，前缀仅支持小写字母、数字和连字符
+- 官方域名格式: `<subdomain>.demox.site` 或 `<subdomain>.vibeme.cn`，前缀仅支持小写字母、数字和连字符
 
 ## 许可证
 

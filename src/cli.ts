@@ -146,8 +146,50 @@ program
         const createdDate = new Date(site.createdAt).toLocaleString("zh-CN");
         console.log(chalk.bold(`${index + 1}. ${site.fileName}`));
         console.log(chalk.gray(`   ID: ${site.websiteId}`));
+        if (site.projectName || site.projectId) {
+          console.log(chalk.gray(`   项目: ${site.projectName || site.projectId}`));
+        }
         printWebsiteUrlLines(site);
         console.log(chalk.gray(`   创建时间: ${createdDate}\n`));
+      });
+
+      process.exit(0);
+    } catch (error: any) {
+      spinner.fail("获取失败");
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+/**
+ * 项目列表命令
+ */
+program
+  .command("projects")
+  .description("列出项目")
+  .action(async () => {
+    const spinner = ora("正在获取项目列表...").start();
+
+    try {
+      const oauth = new OAuthManager();
+      const accessToken = await oauth.ensureAuthenticated();
+      const client = new DemoxClient();
+      const projects = await client.listProjects(accessToken);
+
+      spinner.stop();
+
+      if (projects.length === 0) {
+        console.log(chalk.yellow("\n暂无项目\n"));
+        process.exit(0);
+        return;
+      }
+
+      console.log(chalk.bold(`\n📁 您的项目列表 (共 ${projects.length} 个):\n`));
+      projects.forEach((project, index) => {
+        console.log(chalk.bold(`${index + 1}. ${project.name}`));
+        console.log(chalk.gray(`   ID: ${project.id}`));
+        console.log(chalk.gray(`   Slug: ${project.slug}`));
+        console.log(chalk.gray(`   站点数: ${project.websitesCount || 0}\n`));
       });
 
       process.exit(0);
@@ -166,6 +208,7 @@ program
   .description("部署网站、目录、PDF 或文档")
   .option("-n, --name <name>", "网站名称")
   .option("-i, --id <id>", "网站 ID（更新现有网站）")
+  .option("-p, --project <projectId>", "项目 ID（不传则使用 default 项目）")
   .option("-t, --template <template>", "文档模板：insight、warm、dark", "insight")
   .action(async (path: string, options) => {
     const oauth = new OAuthManager();
@@ -202,6 +245,7 @@ program
         {
           zipFile: path,
           websiteId: options.id,
+          projectId: options.project,
           fileName,
           templateId: options.template,
         },
@@ -213,6 +257,7 @@ program
       console.log(chalk.bold("\n📦 网站信息:"));
       console.log(chalk.gray(`  名称: ${fileName}`));
       console.log(chalk.gray(`  ID: ${result.websiteId}`));
+      if (result.projectId) console.log(chalk.gray(`  项目 ID: ${result.projectId}`));
       console.log(chalk.blue(`  URL: ${result.url}`));
       if (result.customUrl && result.defaultUrl && result.customUrl !== result.defaultUrl) {
         console.log(chalk.gray(`  默认域名: ${result.defaultUrl}`));
@@ -315,6 +360,9 @@ program
       console.log(chalk.bold("\n📄 网站详情:\n"));
       console.log(chalk.bold(`  名称: ${website.fileName}`));
       console.log(chalk.gray(`  ID: ${website.websiteId}`));
+      if (website.projectName || website.projectId) {
+        console.log(chalk.gray(`  项目: ${website.projectName || website.projectId}`));
+      }
       console.log(chalk.blue(`  URL: ${website.url}`));
       if (website.customUrl && website.defaultUrl && website.customUrl !== website.defaultUrl) {
         console.log(chalk.gray(`  默认域名: ${website.defaultUrl}`));
@@ -335,24 +383,26 @@ program
  */
 const domainCommand = program
   .command("domain")
-  .description("管理自定义子域名（5-63 位，<subdomain>.demox.site）");
+  .description("管理官方域名子域名（5-63 位，<subdomain>.<domain>）");
 
 domainCommand
   .command("check <subdomain>")
   .description("检查自定义子域名前缀是否可用")
   .option("-i, --id <websiteId>", "当前网站 ID（允许检查已绑定到自己的前缀）")
-  .action(async (subdomain: string, options) => {
+  .option("-d, --domain <domain>", "官方域名后缀（demox.site 或 vibeme.cn）", "demox.site")
+  .action(async (subdomain: string, options: { id?: string; domain?: string }) => {
     const oauth = new OAuthManager();
 
     try {
       const accessToken = await oauth.ensureAuthenticated();
       const client = new DemoxClient();
-      const result = await client.checkSubdomain(subdomain, accessToken, options.id);
+      const result = await client.checkSubdomain(subdomain, accessToken, options.id, options.domain);
+      const host = `${subdomain}.${result.domain || options.domain || "demox.site"}`;
 
       if (result.available) {
-        console.log(chalk.green(`\n✔ ${subdomain}.demox.site 可用\n`));
+        console.log(chalk.green(`\n✔ ${host} 可用\n`));
       } else {
-        console.log(chalk.yellow(`\n⚠ ${subdomain}.demox.site 不可用`));
+        console.log(chalk.yellow(`\n⚠ ${host} 不可用`));
         if (result.message) console.log(chalk.gray(`  原因: ${result.message}`));
         console.log("");
       }
@@ -366,14 +416,15 @@ domainCommand
 domainCommand
   .command("set <websiteId> <subdomain>")
   .description("给网站设置自定义子域名前缀")
-  .action(async (websiteId: string, subdomain: string) => {
+  .option("-d, --domain <domain>", "官方域名后缀（demox.site 或 vibeme.cn）", "demox.site")
+  .action(async (websiteId: string, subdomain: string, options: { domain?: string }) => {
     const oauth = new OAuthManager();
     const spinner = ora("正在设置自定义域名...").start();
 
     try {
       const accessToken = await oauth.ensureAuthenticated();
       const client = new DemoxClient();
-      const result = await client.setSubdomain(websiteId, subdomain, accessToken);
+      const result = await client.setSubdomain(websiteId, subdomain, accessToken, options.domain);
 
       if (!result.success) {
         throw new Error(result.message || "设置失败");
@@ -382,7 +433,7 @@ domainCommand
       spinner.succeed("自定义域名已设置");
       console.log(chalk.bold("\n🌐 域名信息:"));
       console.log(chalk.gray(`  网站 ID: ${websiteId}`));
-      console.log(chalk.blue(`  URL: ${result.url || `https://${subdomain}.demox.site/`}`));
+      console.log(chalk.blue(`  URL: ${result.url || `https://${subdomain}.${result.subdomainDomain || result.subdomain_domain || options.domain || "demox.site"}/`}`));
       if (result.message) console.log(chalk.gray(`  提示: ${result.message}`));
       console.log("");
       process.exit(0);
