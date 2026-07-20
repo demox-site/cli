@@ -44,7 +44,7 @@ export function loadConfig(): DemoxConfig {
   return {
     clientId: process.env.DEMOX_CLIENT_ID || "demox-mcp-client",
     siteUrl,
-    authUrl: stripTrailingSlash(optionalEnv("DEMOX_AUTH_URL") || `${siteUrl}/#/mcp-authorize`),
+    authUrl: stripTrailingSlash(optionalEnv("DEMOX_AUTH_URL") || `${siteUrl}/mcp-authorize`),
     apiBase: stripTrailingSlash(optionalEnv("DEMOX_API_BASE") || siteUrl),
     cloudFunctionUrl: stripTrailingSlash(optionalEnv("DEMOX_CLOUD_FUNCTION_URL") || apiUrl),
     websiteApiUrl: stripTrailingSlash(optionalEnv("DEMOX_WEBSITE_API_URL") || apiUrl),
