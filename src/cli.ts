@@ -14,6 +14,7 @@ import { OAuthManager, TokenData } from "./auth/oauth.js";
 import { DemoxClient, AuthError, type Website } from "./api/client.js";
 import { getTokenPath, getConfigDir } from "./utils/config.js";
 import { logger } from "./utils/logger.js";
+import { updateCli } from "./utils/updater.js";
 
 const program = new Command();
 const require = createRequire(import.meta.url);
@@ -23,6 +24,39 @@ program
   .name("demox")
   .description("Demox CLI - 部署静态网站到云端")
   .version(version);
+
+program
+  .command("update")
+  .description("检查并更新 Demox CLI")
+  .option("--check", "仅检查是否有新版本")
+  .option("--force", "即使已是最新版本也重新安装")
+  .action(async (options: { check?: boolean; force?: boolean }) => {
+    const spinner = ora("正在检查 Demox CLI 更新...").start();
+    try {
+      const result = await updateCli({
+        currentVersion: version,
+        checkOnly: !!options.check,
+        force: !!options.force
+      });
+      spinner.stop();
+      console.log(chalk.gray(`当前版本: ${result.currentVersion}`));
+      console.log(chalk.gray(`最新版本: ${result.latestVersion}`));
+      if (result.updated) {
+        logger.success(`更新完成，请运行 demox --version 确认版本`);
+      } else if (result.updateAvailable) {
+        logger.info("发现新版本，运行 demox update 完成更新");
+      } else if (result.currentAhead) {
+        logger.info("当前版本高于 npm latest，无需更新");
+      } else {
+        logger.success("当前已是最新版本");
+      }
+      process.exit(0);
+    } catch (error: any) {
+      spinner.fail("更新失败");
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
 
 function printWebsiteUrlLines(site: Website, indent = "   ") {
   console.log(chalk.blue(`${indent}URL: ${site.url}`));
@@ -371,6 +405,7 @@ program
         console.log(chalk.gray(`  默认域名: ${website.defaultUrl}`));
       }
       console.log(chalk.gray(`  路径: ${website.path}`));
+      console.log(chalk.gray(`  页面水印: ${website.hideWatermark ? "隐藏" : "显示"}`));
       console.log(chalk.gray(`  创建时间: ${createdDate}`));
       console.log(chalk.gray(`  更新时间: ${updatedDate}\n`));
 
@@ -386,21 +421,20 @@ program
  */
 const domainCommand = program
   .command("domain")
-  .description("管理官方域名子域名（5-63 位，<subdomain>.<domain>）");
+  .description("管理自定义子域名（5-63 位，<subdomain>.demox.site）");
 
 domainCommand
   .command("check <subdomain>")
   .description("检查自定义子域名前缀是否可用")
   .option("-i, --id <websiteId>", "当前网站 ID（允许检查已绑定到自己的前缀）")
-  .option("-d, --domain <domain>", "官方域名后缀（demox.site 或 vibeme.cn）", "demox.site")
-  .action(async (subdomain: string, options: { id?: string; domain?: string }) => {
+  .action(async (subdomain: string, options: { id?: string }) => {
     const oauth = new OAuthManager();
 
     try {
       const accessToken = await oauth.ensureAuthenticated();
       const client = new DemoxClient();
-      const result = await client.checkSubdomain(subdomain, accessToken, options.id, options.domain);
-      const host = `${subdomain}.${result.domain || options.domain || "demox.site"}`;
+      const result = await client.checkSubdomain(subdomain, accessToken, options.id);
+      const host = `${subdomain}.demox.site`;
 
       if (result.available) {
         console.log(chalk.green(`\n✔ ${host} 可用\n`));
@@ -419,15 +453,14 @@ domainCommand
 domainCommand
   .command("set <websiteId> <subdomain>")
   .description("给网站设置自定义子域名前缀")
-  .option("-d, --domain <domain>", "官方域名后缀（demox.site 或 vibeme.cn）", "demox.site")
-  .action(async (websiteId: string, subdomain: string, options: { domain?: string }) => {
+  .action(async (websiteId: string, subdomain: string) => {
     const oauth = new OAuthManager();
     const spinner = ora("正在设置自定义域名...").start();
 
     try {
       const accessToken = await oauth.ensureAuthenticated();
       const client = new DemoxClient();
-      const result = await client.setSubdomain(websiteId, subdomain, accessToken, options.domain);
+      const result = await client.setSubdomain(websiteId, subdomain, accessToken);
 
       if (!result.success) {
         throw new Error(result.message || "设置失败");
@@ -436,7 +469,7 @@ domainCommand
       spinner.succeed("自定义域名已设置");
       console.log(chalk.bold("\n🌐 域名信息:"));
       console.log(chalk.gray(`  网站 ID: ${websiteId}`));
-      console.log(chalk.blue(`  URL: ${result.url || `https://${subdomain}.${result.subdomainDomain || result.subdomain_domain || options.domain || "demox.site"}/`}`));
+      console.log(chalk.blue(`  URL: ${result.url || `https://${subdomain}.demox.site/`}`));
       if (result.message) console.log(chalk.gray(`  提示: ${result.message}`));
       console.log("");
       process.exit(0);
@@ -472,6 +505,44 @@ domainCommand
       process.exit(1);
     }
   });
+
+/**
+ * 页面水印命令。能力边界由 website-api 按账号 pro/admin 角色执行。
+ */
+const watermarkCommand = program
+  .command("watermark")
+  .description("配置站点页面水印（仅 pro/admin 角色）");
+
+async function configureWatermark(websiteId: string, hideWatermark: boolean) {
+  const oauth = new OAuthManager();
+  const spinner = ora(hideWatermark ? "正在隐藏页面水印..." : "正在显示页面水印...").start();
+
+  try {
+    const accessToken = await oauth.ensureAuthenticated();
+    const client = new DemoxClient();
+    const result = await client.setWatermark(websiteId, hideWatermark, accessToken);
+
+    spinner.succeed(hideWatermark ? "页面水印已隐藏" : "页面水印已显示");
+    console.log(chalk.gray(`\n网站 ID: ${websiteId}`));
+    if (result.message) console.log(chalk.gray(`提示: ${result.message}`));
+    console.log("");
+    process.exit(0);
+  } catch (error: any) {
+    spinner.fail("水印配置失败");
+    logger.error(error.message);
+    process.exit(1);
+  }
+}
+
+watermarkCommand
+  .command("hide <websiteId>")
+  .description("隐藏站点页面中的 Powered by Demox 水印")
+  .action(async (websiteId: string) => configureWatermark(websiteId, true));
+
+watermarkCommand
+  .command("show <websiteId>")
+  .description("重新显示站点页面中的 Powered by Demox 水印")
+  .action(async (websiteId: string) => configureWatermark(websiteId, false));
 
 /**
  * 测试命令

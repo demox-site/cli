@@ -14,37 +14,38 @@ export interface DemoxConfig {
   websiteApiUrl: string;
 }
 
+const DEFAULT_CLIENT_ID = "demox-mcp-client";
+const DEFAULT_SITE_URL = "https://www.demox.site";
+const DEFAULT_API_URL = "https://api.demox.site";
+
 function optionalEnv(name: string): string {
   return (process.env[name] || "").trim();
-}
-
-function requireEnv(name: string): string {
-  const value = optionalEnv(name);
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return stripTrailingSlash(value);
 }
 
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
+function defaultAuthUrl(siteUrl: string): string {
+  const authSiteUrl = siteUrl === "https://demox.site"
+    ? DEFAULT_SITE_URL
+    : siteUrl;
+  return `${authSiteUrl}/mcp-authorize`;
+}
+
 export function loadConfig(): DemoxConfig {
-  const siteUrl = requireEnv("DEMOX_SITE_URL");
+  const siteUrl = stripTrailingSlash(optionalEnv("DEMOX_SITE_URL") || DEFAULT_SITE_URL);
   const apiUrl = stripTrailingSlash(
     optionalEnv("DEMOX_API_URL") ||
     optionalEnv("DEMOX_CLOUD_FUNCTION_URL") ||
-    optionalEnv("DEMOX_WEBSITE_API_URL")
+    optionalEnv("DEMOX_WEBSITE_API_URL") ||
+    DEFAULT_API_URL
   );
-  if (!apiUrl) {
-    throw new Error("Missing required environment variable: DEMOX_API_URL");
-  }
 
   return {
-    clientId: process.env.DEMOX_CLIENT_ID || "demox-mcp-client",
+    clientId: optionalEnv("DEMOX_CLIENT_ID") || DEFAULT_CLIENT_ID,
     siteUrl,
-    authUrl: stripTrailingSlash(optionalEnv("DEMOX_AUTH_URL") || `${siteUrl}/mcp-authorize`),
+    authUrl: stripTrailingSlash(optionalEnv("DEMOX_AUTH_URL") || defaultAuthUrl(siteUrl)),
     apiBase: stripTrailingSlash(optionalEnv("DEMOX_API_BASE") || siteUrl),
     cloudFunctionUrl: stripTrailingSlash(optionalEnv("DEMOX_CLOUD_FUNCTION_URL") || apiUrl),
     websiteApiUrl: stripTrailingSlash(optionalEnv("DEMOX_WEBSITE_API_URL") || apiUrl),

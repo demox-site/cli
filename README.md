@@ -52,17 +52,23 @@ demox info WEBSITE_ID
 # 列出所有项目
 demox projects
 
-# 设置官方域名子域名（5-63 位）
+# 设置自定义子域名（5-63 位）
 demox domain set WEBSITE_ID my-demo
-demox domain set WEBSITE_ID my-demo --domain vibeme.cn
 
-# 检查 / 清除官方域名子域名（5-63 位）
+# 检查 / 清除自定义子域名（5-63 位）
 demox domain check my-demo
-demox domain check my-demo --domain vibeme.cn
 demox domain clear WEBSITE_ID
+
+# 配置页面水印（仅 pro/admin 角色）
+demox watermark hide WEBSITE_ID
+demox watermark show WEBSITE_ID
 
 # 删除网站
 demox delete WEBSITE_ID
+
+# 检查并更新 CLI
+demox update
+demox update --check
 ```
 
 ## 命令参考
@@ -76,12 +82,15 @@ demox delete WEBSITE_ID
 | `demox list` / `demox ls` | 列出所有网站 |
 | `demox projects` | 列出所有项目 |
 | `demox info <id>` | 查看网站详情 |
-| `demox domain check <subdomain>` | 检查官方域名子域名前缀是否可用，长度 5-63 位，支持 `--domain vibeme.cn` |
-| `demox domain set <id> <subdomain>` | 设置官方域名子域名前缀，长度 5-63 位，支持 `--domain vibeme.cn` |
+| `demox domain check <subdomain>` | 检查 `<subdomain>.demox.site` 是否可用，前缀长度 5-63 位 |
+| `demox domain set <id> <subdomain>` | 设置 `<subdomain>.demox.site` 自定义子域名，前缀长度 5-63 位 |
 | `demox domain clear <id>` | 清除自定义子域名前缀 |
+| `demox watermark hide <id>` | 隐藏页面中的 Powered by Demox 水印，仅限 `pro/admin` 角色 |
+| `demox watermark show <id>` | 重新显示页面水印，仅限 `pro/admin` 角色 |
 | `demox delete <id>` / `demox rm <id>` | 删除网站 |
 | `demox test` | 测试服务连接 |
 | `demox clean` | 清理本地缓存 |
+| `demox update` | 检查并安装最新版 CLI；`--check` 仅检查，`--force` 强制重装 |
 
 ### deploy 选项
 
@@ -107,19 +116,19 @@ Token 保存在 `~/.demox/token.json`。
 | 变量 | 描述 | 默认值 |
 |------|------|--------|
 | `DEMOX_CLIENT_ID` | OAuth 客户端 ID | `demox-mcp-client` |
-| `DEMOX_SITE_URL` | Demox 站点 URL，用于生成授权入口 | 必填 |
-| `DEMOX_API_URL` | 后端 API 统一入口 | 必填 |
-| `DEMOX_AUTH_URL` | 授权 URL；不填时由 `DEMOX_SITE_URL` 生成 | 可选 |
-| `DEMOX_API_BASE` | API 基础 URL；不填时使用 `DEMOX_SITE_URL` | 可选 |
-| `DEMOX_CLOUD_FUNCTION_URL` | 部署/API 代理入口；不填时使用 `DEMOX_API_URL` | 可选 |
-| `DEMOX_WEBSITE_API_URL` | 网站管理 API URL；不填时使用 `DEMOX_API_URL` | 可选 |
+| `DEMOX_SITE_URL` | Demox 站点 URL，用于生成授权入口 | `https://www.demox.site` |
+| `DEMOX_API_URL` | 后端 API 统一入口 | `https://api.demox.site` |
+| `DEMOX_AUTH_URL` | 授权 URL | `${DEMOX_SITE_URL}/mcp-authorize` |
+| `DEMOX_API_BASE` | API 基础 URL | `${DEMOX_SITE_URL}` |
+| `DEMOX_CLOUD_FUNCTION_URL` | 部署/API 代理入口 | `${DEMOX_API_URL}` |
+| `DEMOX_WEBSITE_API_URL` | 网站管理 API URL | `${DEMOX_API_URL}` |
 
 ## 限制
 
-- 最大文件大小: 8MB
+- 最大文件大小由 Demox 账户角色配额决定；传输使用分块上传，不受单请求 8MB 限制
 - 支持的文件类型: 目录、ZIP、PDF、Markdown、TXT、DOCX
 - 旧版 `.doc` 暂不支持，请另存为 `.docx`
-- 官方域名格式: `<subdomain>.demox.site` 或 `<subdomain>.vibeme.cn`，前缀仅支持小写字母、数字和连字符
+- 自定义子域名格式: `<subdomain>.demox.site`，前缀仅支持小写字母、数字和连字符
 
 ## 许可证
 

@@ -10,6 +10,7 @@ import {
   isSupportedDocPath,
   isSupportedPdfPath,
 } from "../utils/site-packager.js";
+import { uploadFileInChunks } from "../utils/chunked-upload.js";
 
 export class AuthError extends Error {
   constructor(message: string) {
@@ -33,7 +34,6 @@ export interface DeployResult {
   path: string;
   defaultUrl?: string;
   customUrl?: string | null;
-  subdomainDomain?: string | null;
   preferredUrl?: string;
   cachePurge?: unknown;
 }
@@ -45,13 +45,13 @@ export interface Website {
   url: string;
   path: string;
   subdomain?: string | null;
-  subdomainDomain?: string | null;
   projectId?: string | null;
   projectName?: string | null;
   projectSlug?: string | null;
   defaultUrl?: string;
   customUrl?: string | null;
   preferredUrl?: string;
+  hideWatermark?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -67,7 +67,6 @@ export interface Project {
 export interface DomainCheckResult {
   success: boolean;
   available: boolean;
-  domain?: string;
   reason?: string;
   message?: string;
 }
@@ -75,11 +74,16 @@ export interface DomainCheckResult {
 export interface DomainResult {
   success: boolean;
   subdomain?: string;
-  subdomainDomain?: string;
-  subdomain_domain?: string;
   url?: string;
   message?: string;
   code?: string;
+}
+
+export interface WatermarkResult {
+  success: boolean;
+  hideWatermark: boolean;
+  websiteId?: string;
+  message?: string;
 }
 
 export class DemoxClient {
@@ -261,24 +265,14 @@ export class DemoxClient {
     const fileSize = await this.getFileSize(localFilePath);
     logger.info(`文件大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB`);
 
-    const maxFileSize = 8 * 1024 * 1024;
-    if (fileSize > maxFileSize) {
-      throw new Error(`文件过大 (${(fileSize / 1024 / 1024).toFixed(2)}MB)，当前最大支持 8MB`);
-    }
-
-    const fileContentBase64 = await this.readFileAsBase64(localFilePath);
-
-    const result = await this.callApi(
-      "/deploy",
-      {
-        action: "upload_and_deploy",
-        fileContentBase64,
-        fileName: params.fileName,
-        websiteId,
-        projectId: params.projectId,
-      },
-      accessToken
-    );
+    const result = await uploadFileInChunks({
+      filePath: localFilePath,
+      fileName: params.fileName,
+      websiteId,
+      projectId: params.projectId,
+      callApi: (payload) => this.callApi("/deploy", payload, accessToken),
+      onProgress: (uploaded, total) => logger.info(`上传分块: ${uploaded}/${total}`)
+    });
 
     logger.success(`网站部署成功: ${result.url}`);
     return result;
@@ -316,12 +310,6 @@ export class DemoxClient {
   private async getFileSize(filePath: string): Promise<number> {
     const stat = await this.getPathStat(filePath);
     return stat.size;
-  }
-
-  private async readFileAsBase64(filePath: string): Promise<string> {
-    const fs = await import("fs");
-    const buffer = fs.readFileSync(filePath);
-    return buffer.toString("base64");
   }
 
   private async zipDirectoryToFile(dirPath: string): Promise<string> {
@@ -416,10 +404,9 @@ export class DemoxClient {
     return websiteId ? `https://${websiteId.toLowerCase()}.demox.site/` : "";
   }
 
-  private buildCustomUrl(subdomain?: string | null, domain?: string | null): string | null {
+  private buildCustomUrl(subdomain?: string | null): string | null {
     const label = (subdomain || "").trim().toLowerCase();
-    const suffix = (domain || "demox.site").trim().toLowerCase();
-    return label ? `https://${label}.${suffix}/` : null;
+    return label ? `https://${label}.demox.site/` : null;
   }
 
   /**
@@ -428,9 +415,8 @@ export class DemoxClient {
   private mapMySQLToCamelCase(row: any): Website {
     const websiteId = row.website_id || row.websiteId || "";
     const subdomain = row.subdomain || null;
-    const subdomainDomain = row.subdomainDomain || row.subdomain_domain || "demox.site";
     const defaultUrl = row.defaultUrl || row.default_url || this.buildDefaultUrl(websiteId);
-    const customUrl = row.customUrl || row.custom_url || this.buildCustomUrl(subdomain, subdomainDomain);
+    const customUrl = row.customUrl || row.custom_url || this.buildCustomUrl(subdomain);
     const preferredUrl = row.preferredUrl || row.preferred_url || customUrl || defaultUrl || row.url || "";
 
     return {
@@ -440,13 +426,16 @@ export class DemoxClient {
       path: row.path || "",
       url: preferredUrl,
       subdomain,
-      subdomainDomain,
       projectId: row.project_id || row.projectId ? String(row.project_id || row.projectId) : null,
       projectName: row.project_name || row.projectName || null,
       projectSlug: row.project_slug || row.projectSlug || null,
       defaultUrl,
       customUrl,
       preferredUrl,
+      hideWatermark:
+        row.hideWatermark === true ||
+        row.hide_watermark === true ||
+        Number(row.hide_watermark) === 1,
       createdAt: row.created_at || row.createdAt || "",
       updatedAt: row.updated_at || row.updatedAt || "",
     };
@@ -497,12 +486,11 @@ export class DemoxClient {
   async checkSubdomain(
     subdomain: string,
     accessToken: string,
-    websiteId?: string,
-    domain?: string
+    websiteId?: string
   ): Promise<DomainCheckResult> {
     return await this.callApi(
       "/website/check-subdomain",
-      { action: "check_subdomain", subdomain, websiteId, domain },
+      { action: "check_subdomain", subdomain, websiteId },
       accessToken,
       this.websiteApiUrl
     );
@@ -511,12 +499,11 @@ export class DemoxClient {
   async setSubdomain(
     websiteId: string,
     subdomain: string,
-    accessToken: string,
-    domain?: string
+    accessToken: string
   ): Promise<DomainResult> {
     return await this.callApi(
       "/website/set-subdomain",
-      { action: "set_subdomain", websiteId, subdomain, domain },
+      { action: "set_subdomain", websiteId, subdomain },
       accessToken,
       this.websiteApiUrl
     );
@@ -529,6 +516,19 @@ export class DemoxClient {
     return await this.callApi(
       "/website/clear-subdomain",
       { action: "clear_subdomain", websiteId },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
+
+  async setWatermark(
+    websiteId: string,
+    hideWatermark: boolean,
+    accessToken: string
+  ): Promise<WatermarkResult> {
+    return await this.callApi(
+      "/website/update-watermark",
+      { action: "update_watermark", websiteId, hideWatermark },
       accessToken,
       this.websiteApiUrl
     );
