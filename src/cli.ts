@@ -199,10 +199,12 @@ program
   });
 
 /**
- * 项目列表命令
+ * 项目命令
  */
-program
-  .command("projects")
+const projectsCmd = program.command("projects").description("管理项目");
+
+projectsCmd
+  .command("list")
   .description("列出项目")
   .action(async () => {
     const spinner = ora("正在获取项目列表...").start();
@@ -232,6 +234,292 @@ program
       process.exit(0);
     } catch (error: any) {
       spinner.fail("获取失败");
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+projectsCmd
+  .command("create")
+  .description("创建项目（普通用户默认最多 3 个）")
+  .requiredOption("-n, --name <name>", "项目名称")
+  .option("--slug <slug>", "项目 slug")
+  .option("--description <text>", "项目描述")
+  .action(async (options: { name: string; slug?: string; description?: string }) => {
+    const spinner = ora("正在创建项目...").start();
+    try {
+      const oauth = new OAuthManager();
+      const accessToken = await oauth.ensureAuthenticated();
+      const client = new DemoxClient();
+      const result = await client.createProject(
+        { name: options.name, slug: options.slug, description: options.description },
+        accessToken
+      );
+      spinner.stop();
+      console.log(chalk.bold("\n📁 项目已创建\n"));
+      console.log(chalk.gray(`  ID: ${result.project?.id}`));
+      console.log(chalk.gray(`  名称: ${result.project?.name}`));
+      console.log(chalk.gray(`  Slug: ${result.project?.slug}\n`));
+      process.exit(0);
+    } catch (error: any) {
+      spinner.fail("创建失败");
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+// 兼容旧用法：demox projects → 列表
+projectsCmd.action(async () => {
+  const spinner = ora("正在获取项目列表...").start();
+  try {
+    const oauth = new OAuthManager();
+    const accessToken = await oauth.ensureAuthenticated();
+    const client = new DemoxClient();
+    const projects = await client.listProjects(accessToken);
+    spinner.stop();
+    if (projects.length === 0) {
+      console.log(chalk.yellow("\n暂无项目\n"));
+      process.exit(0);
+      return;
+    }
+    console.log(chalk.bold(`\n📁 您的项目列表 (共 ${projects.length} 个):\n`));
+    projects.forEach((project, index) => {
+      console.log(chalk.bold(`${index + 1}. ${project.name}`));
+      console.log(chalk.gray(`   ID: ${project.id}`));
+      console.log(chalk.gray(`   Slug: ${project.slug}`));
+      console.log(chalk.gray(`   站点数: ${project.websitesCount || 0}\n`));
+    });
+    process.exit(0);
+  } catch (error: any) {
+    spinner.fail("获取失败");
+    logger.error(error.message);
+    process.exit(1);
+  }
+});
+
+/**
+ * 项目数据库命令
+ */
+const dbCmd = program.command("db").description("管理项目数据库（表与行，按项目隔离，默认每项目 100MB）");
+
+async function withDbClient<T>(
+  run: (client: DemoxClient, token: string) => Promise<T>
+): Promise<T> {
+  const oauth = new OAuthManager();
+  const accessToken = await oauth.ensureAuthenticated();
+  const client = new DemoxClient();
+  return run(client, accessToken);
+}
+
+dbCmd
+  .command("tables")
+  .description("列出项目下的表")
+  .requiredOption("-p, --project <projectId>", "项目 ID")
+  .action(async (options: { project: string }) => {
+    const spinner = ora("正在获取表列表...").start();
+    try {
+      const result = await withDbClient((client, token) =>
+        client.listProjectTables(options.project, token)
+      );
+      spinner.stop();
+      const tables = result.tables || [];
+      const usage = result.usage;
+      if (usage) {
+        const used = usage.bytesUsed ?? 0;
+        const limit = usage.bytesLimit;
+        console.log(
+          chalk.gray(
+            `\n用量: ${used} / ${limit == null ? "不限" : limit} bytes\n`
+          )
+        );
+      }
+      if (tables.length === 0) {
+        console.log(chalk.yellow("暂无数据表\n"));
+        process.exit(0);
+        return;
+      }
+      tables.forEach((table: any, index: number) => {
+        console.log(chalk.bold(`${index + 1}. ${table.name}`));
+        console.log(chalk.gray(`   行数: ${table.rowCount ?? 0}`));
+        console.log(
+          chalk.gray(
+            `   列: ${(table.columns || [])
+              .map((c: any) => `${c.name}:${c.type}${c.primary ? "*" : ""}`)
+              .join(", ")}\n`
+          )
+        );
+      });
+      process.exit(0);
+    } catch (error: any) {
+      spinner.fail("获取失败");
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+dbCmd
+  .command("usage")
+  .description("查看项目数据库用量")
+  .requiredOption("-p, --project <projectId>", "项目 ID")
+  .action(async (options: { project: string }) => {
+    try {
+      const result = await withDbClient((client, token) =>
+        client.getProjectDbUsage(options.project, token)
+      );
+      console.log(JSON.stringify(result, null, 2));
+      process.exit(0);
+    } catch (error: any) {
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+dbCmd
+  .command("create-table")
+  .description("创建表（需一个 text 主键列）")
+  .requiredOption("-p, --project <projectId>", "项目 ID")
+  .requiredOption("-n, --name <name>", "表名（小写字母开头）")
+  .requiredOption(
+    "-c, --columns <json>",
+    '列定义 JSON，例如 \'[{"name":"id","type":"text","primary":true},{"name":"title","type":"text"}]\''
+  )
+  .action(async (options: { project: string; name: string; columns: string }) => {
+    const spinner = ora("正在建表...").start();
+    try {
+      let columns: any;
+      try {
+        columns = JSON.parse(options.columns);
+      } catch {
+        throw new Error("--columns 需要是合法 JSON 数组");
+      }
+      const result = await withDbClient((client, token) =>
+        client.createProjectTable(options.project, options.name, columns, token)
+      );
+      spinner.succeed("表已创建");
+      console.log(JSON.stringify(result.table || result, null, 2));
+      process.exit(0);
+    } catch (error: any) {
+      spinner.fail("建表失败");
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+dbCmd
+  .command("describe")
+  .description("查看表结构")
+  .requiredOption("-p, --project <projectId>", "项目 ID")
+  .requiredOption("-t, --table <name>", "表名")
+  .action(async (options: { project: string; table: string }) => {
+    try {
+      const result = await withDbClient((client, token) =>
+        client.getProjectTable(options.project, options.table, token)
+      );
+      console.log(JSON.stringify(result.table || result, null, 2));
+      process.exit(0);
+    } catch (error: any) {
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+dbCmd
+  .command("drop-table")
+  .description("删除表及其全部行")
+  .requiredOption("-p, --project <projectId>", "项目 ID")
+  .requiredOption("-t, --table <name>", "表名")
+  .option("-f, --force", "跳过确认")
+  .action(async (options: { project: string; table: string; force?: boolean }) => {
+    if (!options.force) {
+      logger.error("删除表不可撤销，请加 --force 确认");
+      process.exit(1);
+      return;
+    }
+    const spinner = ora("正在删表...").start();
+    try {
+      const result = await withDbClient((client, token) =>
+        client.deleteProjectTable(options.project, options.table, token)
+      );
+      spinner.succeed(`已删除表 ${result.deleted || options.table}`);
+      process.exit(0);
+    } catch (error: any) {
+      spinner.fail("删表失败");
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+dbCmd
+  .command("rows")
+  .description("列出表中的行")
+  .requiredOption("-p, --project <projectId>", "项目 ID")
+  .requiredOption("-t, --table <name>", "表名")
+  .option("--limit <n>", "每页行数", "50")
+  .option("--after <pk>", "游标（上一页最后一行的主键）")
+  .action(async (options: { project: string; table: string; limit?: string; after?: string }) => {
+    try {
+      const result = await withDbClient((client, token) =>
+        client.listProjectRows(options.project, options.table, token, {
+          limit: options.limit ? Number(options.limit) : undefined,
+          after: options.after,
+        })
+      );
+      console.log(JSON.stringify(result, null, 2));
+      process.exit(0);
+    } catch (error: any) {
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+dbCmd
+  .command("put")
+  .description("写入或覆盖一行（按主键 upsert）")
+  .requiredOption("-p, --project <projectId>", "项目 ID")
+  .requiredOption("-t, --table <name>", "表名")
+  .requiredOption("-v, --values <json>", "行内容 JSON")
+  .action(async (options: { project: string; table: string; values: string }) => {
+    const spinner = ora("正在写入...").start();
+    try {
+      let values: Record<string, unknown>;
+      try {
+        values = JSON.parse(options.values);
+      } catch {
+        throw new Error("--values 需要是合法 JSON 对象");
+      }
+      const result = await withDbClient((client, token) =>
+        client.putProjectRow(options.project, options.table, values, token)
+      );
+      spinner.succeed(result.created ? "已插入" : "已更新");
+      console.log(JSON.stringify(result, null, 2));
+      process.exit(0);
+    } catch (error: any) {
+      spinner.fail("写入失败");
+      logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+dbCmd
+  .command("delete-row")
+  .description("按主键删除一行")
+  .requiredOption("-p, --project <projectId>", "项目 ID")
+  .requiredOption("-t, --table <name>", "表名")
+  .requiredOption("--pk <pk>", "主键值")
+  .option("-f, --force", "跳过确认")
+  .action(async (options: { project: string; table: string; pk: string; force?: boolean }) => {
+    if (!options.force) {
+      logger.error("删除行不可撤销，请加 --force 确认");
+      process.exit(1);
+      return;
+    }
+    try {
+      const result = await withDbClient((client, token) =>
+        client.deleteProjectRow(options.project, options.table, options.pk, token)
+      );
+      console.log(JSON.stringify(result, null, 2));
+      process.exit(0);
+    } catch (error: any) {
       logger.error(error.message);
       process.exit(1);
     }
