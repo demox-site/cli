@@ -1,6 +1,6 @@
 # Demox CLI
 
-命令行工具，用于部署静态网站到 Demox 平台。
+命令行工具，用于部署静态网站到 Demox 平台，并管理项目数据库（表与行）。
 
 ## 安装
 
@@ -52,6 +52,9 @@ demox info WEBSITE_ID
 # 列出所有项目
 demox projects
 
+# 创建项目（普通用户默认最多 3 个）
+demox projects create -n my-project
+
 # 设置自定义子域名（5-63 位）
 demox domain set WEBSITE_ID my-demo
 
@@ -71,6 +74,27 @@ demox update
 demox update --check
 ```
 
+### 4. 项目数据库
+
+每个项目有独立的表存储（默认每项目 **100MB**）。列类型仅 `text` / `number` / `boolean`，且必须正好一个 **text** 主键。
+
+```bash
+# 列出表 / 查看用量
+demox db tables -p PROJECT_ID
+demox db usage -p PROJECT_ID
+
+# 建表
+demox db create-table -p PROJECT_ID -n notes \
+  -c '[{"name":"id","type":"text","primary":true},{"name":"title","type":"text"}]'
+
+# 表结构 / 行
+demox db describe -p PROJECT_ID -t notes
+demox db rows -p PROJECT_ID -t notes
+demox db put -p PROJECT_ID -t notes -v '{"id":"1","title":"hello"}'
+demox db delete-row -p PROJECT_ID -t notes --pk 1 --force
+demox db drop-table -p PROJECT_ID -t notes --force
+```
+
 ## 命令参考
 
 | 命令 | 描述 |
@@ -81,6 +105,8 @@ demox update --check
 | `demox deploy <path>` | 部署网站、目录、PDF 或文档 |
 | `demox list` / `demox ls` | 列出所有网站 |
 | `demox projects` | 列出所有项目 |
+| `demox projects create` | 创建项目（普通用户默认最多 3 个） |
+| `demox db …` | 管理项目数据库（表 / 行 / 用量） |
 | `demox info <id>` | 查看网站详情 |
 | `demox domain check <subdomain>` | 检查 `<subdomain>.demox.site` 是否可用，前缀长度 5-63 位 |
 | `demox domain set <id> <subdomain>` | 设置 `<subdomain>.demox.site` 自定义子域名，前缀长度 5-63 位 |
@@ -106,6 +132,19 @@ demox update --check
 ```
 -f, --force          强制删除，不提示确认
 ```
+
+### db 子命令
+
+| 子命令 | 描述 |
+|--------|------|
+| `demox db tables -p <projectId>` | 列出表与用量 |
+| `demox db usage -p <projectId>` | 查看已用字节与上限 |
+| `demox db create-table -p <id> -n <name> -c <json>` | 建表 |
+| `demox db describe -p <id> -t <table>` | 查看表结构 |
+| `demox db drop-table -p <id> -t <table> --force` | 删表 |
+| `demox db rows -p <id> -t <table>` | 分页列出行（`--limit` / `--after`） |
+| `demox db put -p <id> -t <table> -v <json>` | 按主键 upsert 一行 |
+| `demox db delete-row -p <id> -t <table> --pk <pk> --force` | 按主键删行 |
 
 ## 配置
 
