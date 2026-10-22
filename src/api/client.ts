@@ -11,13 +11,14 @@ import {
   isSupportedPdfPath,
 } from "../utils/site-packager.js";
 import { uploadFileInChunks } from "../utils/chunked-upload.js";
-
-export class AuthError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AuthError";
-  }
-}
+import {
+  createFunctionApi,
+  type PushFunctionParams,
+  type PushFunctionResult,
+  type SiteFunction,
+} from "./functions.js";
+export { AuthError } from "./errors.js";
+import { AuthError } from "./errors.js";
 
 export interface DeployParams {
   zipFile: string;
@@ -636,5 +637,74 @@ export class DemoxClient {
       accessToken,
       this.websiteApiUrl
     );
+  }
+
+  private functionApi() {
+    return createFunctionApi({ apiUrl: this.apiUrl });
+  }
+
+  listFunctions(
+    websiteId: string,
+    accessToken: string,
+    envName?: string
+  ): Promise<SiteFunction[]> {
+    return this.functionApi().listFunctions(websiteId, accessToken, envName);
+  }
+
+  pushFunction(
+    params: PushFunctionParams,
+    accessToken: string
+  ): Promise<PushFunctionResult> {
+    return this.functionApi().pushFunction(params, accessToken);
+  }
+
+  getFunctionEnv(
+    functionId: string,
+    accessToken: string
+  ): Promise<Record<string, string>> {
+    return this.functionApi().getFunctionEnv(functionId, accessToken);
+  }
+
+  putFunctionEnv(
+    functionId: string,
+    env: Record<string, string>,
+    accessToken: string
+  ): Promise<Record<string, string>> {
+    return this.functionApi().putFunctionEnv(functionId, env, accessToken);
+  }
+
+  listAliases(
+    functionId: string,
+    accessToken: string
+  ): Promise<Array<{ alias: string; version: number }>> {
+    return this.functionApi().listAliases(functionId, accessToken);
+  }
+
+  setAlias(
+    functionId: string,
+    alias: string,
+    version: number,
+    accessToken: string
+  ): Promise<{ alias: string; version: number }> {
+    return this.functionApi().setAlias(functionId, alias, version, accessToken);
+  }
+
+  deleteAlias(
+    functionId: string,
+    alias: string,
+    accessToken: string
+  ): Promise<void> {
+    return this.functionApi().deleteAlias(functionId, alias, accessToken);
+  }
+
+  invokeSiteFunction(params: {
+    websiteId: string;
+    slug: string;
+    method?: string;
+    body?: unknown;
+    envName?: string;
+    accessToken?: string;
+  }): Promise<{ status: number; body: unknown }> {
+    return this.functionApi().invokeSiteFunction(params);
   }
 }

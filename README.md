@@ -1,6 +1,6 @@
 # Demox CLI
 
-命令行工具，用于部署静态网站到 Demox 平台。
+命令行工具，用于部署静态网站、管理站点云函数，以及项目数据库。
 
 ## 安装
 
@@ -49,8 +49,18 @@ demox list
 # 查看网站详情
 demox info WEBSITE_ID
 
-# 列出所有项目
+# 列出所有项目 / 创建项目
 demox projects
+demox projects create -n my-project
+
+# 云函数（入口须为 index.js / index.cjs / index.mjs）
+demox functions push ./api/hello --id WEBSITE_ID --slug hello
+demox functions list --id WEBSITE_ID
+demox functions alias set production --id WEBSITE_ID --slug hello --version=2
+demox env set --id WEBSITE_ID --slug hello --from .env
+
+# 项目数据库
+demox db tables -p PROJECT_ID
 
 # 设置自定义子域名（5-63 位）
 demox domain set WEBSITE_ID my-demo
@@ -80,7 +90,10 @@ demox update --check
 | `demox status` | 查看当前登录状态 |
 | `demox deploy <path>` | 部署网站、目录、PDF 或文档 |
 | `demox list` / `demox ls` | 列出所有网站 |
-| `demox projects` | 列出所有项目 |
+| `demox projects` | 列出 / 创建项目 |
+| `demox db …` | 管理项目数据库 |
+| `demox functions …` / `demox fn …` | 管理站点云函数 |
+| `demox env …` | 管理函数环境变量 |
 | `demox info <id>` | 查看网站详情 |
 | `demox domain check <subdomain>` | 检查 `<subdomain>.demox.site` 是否可用，前缀长度 5-63 位 |
 | `demox domain set <id> <subdomain>` | 设置 `<subdomain>.demox.site` 自定义子域名，前缀长度 5-63 位 |
@@ -106,6 +119,21 @@ demox update --check
 ```
 -f, --force          强制删除，不提示确认
 ```
+
+### functions / env
+
+```bash
+demox functions list --id WEBSITE_ID
+demox functions push ./api/hello --id WEBSITE_ID --slug hello
+demox functions invoke --id WEBSITE_ID --slug hello --body '{"ping":true}'
+# 别名必须写成 --version=N（单独的 --version N 会被当成 CLI 全局版本开关）
+demox functions alias set production --id WEBSITE_ID --slug hello --version=2
+demox env set --id WEBSITE_ID --slug hello API_KEY=secret
+demox env set --id WEBSITE_ID --slug hello --from .env
+demox env list --id WEBSITE_ID --slug hello
+```
+
+首次 `functions push` 创建 v1，并让 `production` / `develop` 指向 v1；之后再 push 只生成新版本，不会自动改别名。
 
 ## 配置
 
