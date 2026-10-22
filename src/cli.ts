@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Demox CLI - 部署静态网站的命令行工具
+ * Demox CLI - 部署静态网站与云函数的命令行工具
  */
 
 import { Command } from "commander";
@@ -12,6 +12,11 @@ import { createRequire } from "module";
 import pathModule from "path";
 import { OAuthManager, TokenData } from "./auth/oauth.js";
 import { DemoxClient, AuthError, type Website } from "./api/client.js";
+import {
+  parseEnvAssignments,
+  readEnvFile,
+  resolveFunctionSource,
+} from "./api/functions.js";
 import { getTokenPath, getConfigDir } from "./utils/config.js";
 import { logger } from "./utils/logger.js";
 import { updateCli } from "./utils/updater.js";
@@ -22,7 +27,7 @@ const { version } = require("../package.json") as { version: string };
 
 program
   .name("demox")
-  .description("Demox CLI - 部署静态网站到云端")
+  .description("Demox CLI - 部署静态网站与云函数到云端")
   .version(version);
 
 program
@@ -521,6 +526,471 @@ dbCmd
       process.exit(0);
     } catch (error: any) {
       logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+/**
+ * 云函数命令
+ */
+const functionsCommand = program
+  .command("functions")
+  .alias("fn")
+  .description("管理站点云函数");
+
+functionsCommand
+  .command("list")
+  .description("列出站点云函数")
+  .requiredOption("-i, --id <websiteId>", "网站 ID")
+  .action(async (options: { id: string }) => {
+    const spinner = ora("正在获取云函数列表...").start();
+    try {
+      const oauth = new OAuthManager();
+      const accessToken = await oauth.ensureAuthenticated();
+      const client = new DemoxClient();
+      const functions = await client.listFunctions(options.id, accessToken);
+      spinner.stop();
+      if (!functions.length) {
+        console.log(chalk.yellow("\n该站点还没有云函数"));
+        console.log(
+          chalk.gray(
+            "运行 demox functions push <文件或目录> --id <网站ID> --slug <标识>\n"
+          )
+        );
+        process.exit(0);
+        return;
+      }
+      console.log(chalk.bold(`\n☁ 云函数 (共 ${functions.length} 个):\n`));
+      functions.forEach((item, index) => {
+        console.log(chalk.bold(`${index + 1}. ${item.name || item.slug}`));
+        console.log(chalk.gray(`   ID: ${item.functionId}`));
+        console.log(chalk.gray(`   Slug: ${item.slug}`));
+        console.log(chalk.gray(`   版本: ${item.publishedVersion || "未发布"}`));
+        if (item.aliases?.length) {
+          console.log(
+            chalk.gray(
+              `   别名: ${item.aliases
+                .map((alias) => `${alias.alias}->v${alias.version}`)
+                .join(", ")}`
+            )
+          );
+        }
+        if (item.invokeUrl) console.log(chalk.blue(`   URL: ${item.invokeUrl}`));
+        console.log("");
+      });
+      process.exit(0);
+    } catch (error: any) {
+      spinner.fail("获取失败");
+      if (error instanceof AuthError) logger.error("认证失败，请重新登录: demox login");
+      else logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+functionsCommand
+  .command("push <path>")
+  .description("把本地函数代码上传为新版本（不会改别名）")
+  .requiredOption("-i, --id <websiteId>", "网站 ID")
+  .requiredOption("-s, --slug <slug>", "函数标识，例如 auth、website、hello")
+  .option("-n, --name <name>", "函数显示名，仅新建时使用")
+  .option("--entrypoint <file>", "入口文件名，默认 index.js / index.cjs / index.mjs")
+  .option("--routes <routes>", "自定义路径，逗号分隔，仅新建时使用")
+  .action(
+    async (
+      inputPath: string,
+      options: {
+        id: string;
+        slug: string;
+        name?: string;
+        entrypoint?: string;
+        routes?: string;
+      }
+    ) => {
+      const oauth = new OAuthManager();
+      try {
+        const accessToken = await oauth.ensureAuthenticated();
+        const client = new DemoxClient();
+        const source = await resolveFunctionSource(inputPath, options.entrypoint);
+        const routes = (options.routes || "")
+          .split(/[\s,]+/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+        console.log(chalk.bold(`\n☁ 推送云函数: ${options.slug}\n`));
+        const spinner = ora("正在上传函数代码...").start();
+        const result = await client.pushFunction(
+          {
+            websiteId: options.id,
+            slug: options.slug,
+            name: options.name || options.slug,
+            source: source.source,
+            entrypoint: source.entrypoint,
+            routes: routes.length ? routes : undefined,
+          },
+          accessToken
+        );
+        spinner.succeed(
+          result.created
+            ? "已创建 v1，production/develop 指向 v1"
+            : `已上传 v${result.version}，别名未改动`
+        );
+        console.log(chalk.gray(`  函数 ID: ${result.functionId}`));
+        console.log(chalk.gray(`  Slug: ${result.slug}`));
+        console.log(chalk.gray(`  版本: ${result.version}`));
+        console.log(chalk.gray(`  入口: ${result.entrypoint}`));
+        if (result.aliases?.length) {
+          console.log(
+            chalk.gray(
+              `  别名: ${result.aliases
+                .map((item) => `${item.alias}->v${item.version}`)
+                .join(", ")}`
+            )
+          );
+        }
+        if (result.invokeUrl) console.log(chalk.blue(`  URL: ${result.invokeUrl}`));
+        console.log(
+          chalk.gray(
+            "  要用新版本，请执行 demox functions alias set --id <网站ID> --slug <标识> production --version=N"
+          )
+        );
+        console.log("");
+        process.exit(0);
+      } catch (error: any) {
+        if (error instanceof AuthError) logger.error("认证失败，请重新登录: demox login");
+        else logger.error(error.message);
+        process.exit(1);
+      }
+    }
+  );
+
+functionsCommand
+  .command("invoke")
+  .description("调用已发布的站点云函数")
+  .requiredOption("-i, --id <websiteId>", "网站 ID")
+  .requiredOption("-s, --slug <slug>", "函数标识")
+  .option("-a, --alias <alias>", "别名，默认 production", "production")
+  .option("-m, --method <method>", "HTTP 方法", "POST")
+  .option("-b, --body <json>", "JSON 请求体，默认 {}")
+  .action(
+    async (options: {
+      id: string;
+      slug: string;
+      alias?: string;
+      method?: string;
+      body?: string;
+    }) => {
+      try {
+        const oauth = new OAuthManager();
+        const accessToken = await oauth.ensureAuthenticated();
+        const client = new DemoxClient();
+        let body: unknown = {};
+        if (options.body) {
+          try {
+            body = JSON.parse(options.body);
+          } catch {
+            throw new Error("请求体必须是 JSON");
+          }
+        }
+        const result = await client.invokeSiteFunction({
+          websiteId: options.id,
+          slug: options.slug,
+          method: options.method,
+          body,
+          envName: options.alias || "production",
+          accessToken,
+        });
+        console.log(chalk.gray(`HTTP ${result.status}`));
+        console.log(
+          typeof result.body === "string"
+            ? result.body
+            : JSON.stringify(result.body, null, 2)
+        );
+        process.exit(result.status >= 200 && result.status < 300 ? 0 : 1);
+      } catch (error: any) {
+        if (error instanceof AuthError) logger.error("认证失败，请重新登录: demox login");
+        else logger.error(error.message);
+        process.exit(1);
+      }
+    }
+  );
+
+async function resolveSiteFunction(
+  client: DemoxClient,
+  websiteId: string,
+  slug: string,
+  accessToken: string
+) {
+  const functions = await client.listFunctions(websiteId, accessToken);
+  const record = functions.find(
+    (item) => item.slug === slug || item.functionId === slug
+  );
+  if (!record) {
+    throw new Error(
+      `未找到函数: ${slug}。请先执行 demox functions push <路径> --id ${websiteId} --slug ${slug}`
+    );
+  }
+  return record;
+}
+
+async function printFunctionAliases(
+  client: DemoxClient,
+  websiteId: string,
+  slug: string,
+  accessToken: string
+) {
+  const record = await resolveSiteFunction(client, websiteId, slug, accessToken);
+  const aliases = await client.listAliases(record.functionId, accessToken);
+  if (!aliases.length) {
+    console.log(chalk.yellow("还没有别名"));
+    return;
+  }
+  console.log(chalk.bold(`\n别名 (${record.slug}):\n`));
+  for (const item of aliases) console.log(`  ${item.alias} -> v${item.version}`);
+  console.log("");
+}
+
+async function setFunctionAlias(
+  client: DemoxClient,
+  websiteId: string,
+  slug: string,
+  alias: string,
+  version: string,
+  accessToken: string
+) {
+  if (!version) throw new Error("修改别名时必须提供 --version");
+  const record = await resolveSiteFunction(client, websiteId, slug, accessToken);
+  const saved = await client.setAlias(
+    record.functionId,
+    alias,
+    Number(version),
+    accessToken
+  );
+  logger.success(`${saved.alias} -> v${saved.version}`);
+}
+
+const aliasCommand = functionsCommand
+  .command("alias")
+  .description("查看或修改函数别名");
+
+aliasCommand
+  .command("list", { isDefault: true })
+  .description("列出函数别名")
+  .requiredOption("-i, --id <websiteId>", "网站 ID")
+  .requiredOption("-s, --slug <slug>", "函数标识")
+  .option("--set <alias>", "兼容旧写法：要修改的别名，例如 production")
+  .option("--version <version>", "别名指向的版本")
+  .action(
+    async (options: {
+      id: string;
+      slug: string;
+      set?: string;
+      version?: string;
+    }) => {
+      try {
+        const oauth = new OAuthManager();
+        const accessToken = await oauth.ensureAuthenticated();
+        const client = new DemoxClient();
+        if (options.set) {
+          await setFunctionAlias(
+            client,
+            options.id,
+            options.slug,
+            options.set,
+            String(options.version || ""),
+            accessToken
+          );
+          process.exit(0);
+          return;
+        }
+        await printFunctionAliases(client, options.id, options.slug, accessToken);
+        process.exit(0);
+      } catch (error: any) {
+        if (error instanceof AuthError) logger.error("认证失败，请重新登录: demox login");
+        else logger.error(error.message);
+        process.exit(1);
+      }
+    }
+  );
+
+aliasCommand
+  .command("set <alias>")
+  .description("把别名指向指定版本，例如 production -> v2")
+  .requiredOption("-i, --id <websiteId>", "网站 ID")
+  .requiredOption("-s, --slug <slug>", "函数标识")
+  .requiredOption("--version <version>", "别名指向的版本")
+  .action(
+    async (
+      alias: string,
+      options: { id: string; slug: string; version: string }
+    ) => {
+      try {
+        const oauth = new OAuthManager();
+        const accessToken = await oauth.ensureAuthenticated();
+        const client = new DemoxClient();
+        await setFunctionAlias(
+          client,
+          options.id,
+          options.slug,
+          alias,
+          options.version,
+          accessToken
+        );
+        process.exit(0);
+      } catch (error: any) {
+        if (error instanceof AuthError) logger.error("认证失败，请重新登录: demox login");
+        else logger.error(error.message);
+        process.exit(1);
+      }
+    }
+  );
+
+aliasCommand
+  .command("delete <alias>")
+  .description("删除自定义别名（不能删除 production / develop）")
+  .requiredOption("-i, --id <websiteId>", "网站 ID")
+  .requiredOption("-s, --slug <slug>", "函数标识")
+  .action(async (alias: string, options: { id: string; slug: string }) => {
+    try {
+      const oauth = new OAuthManager();
+      const accessToken = await oauth.ensureAuthenticated();
+      const client = new DemoxClient();
+      const record = await resolveSiteFunction(
+        client,
+        options.id,
+        options.slug,
+        accessToken
+      );
+      await client.deleteAlias(record.functionId, alias, accessToken);
+      logger.success(`已删除别名 ${alias}`);
+      process.exit(0);
+    } catch (error: any) {
+      if (error instanceof AuthError) logger.error("认证失败，请重新登录: demox login");
+      else logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+const envCommand = program
+  .command("env")
+  .description("管理函数环境变量（每个函数各自一份）");
+
+envCommand
+  .command("list")
+  .description("列出函数环境变量")
+  .requiredOption("-i, --id <websiteId>", "网站 ID")
+  .requiredOption("-s, --slug <slug>", "函数标识")
+  .option("--keys-only", "只显示变量名")
+  .action(async (options: { id: string; slug: string; keysOnly?: boolean }) => {
+    const spinner = ora("正在获取环境变量...").start();
+    try {
+      const oauth = new OAuthManager();
+      const accessToken = await oauth.ensureAuthenticated();
+      const client = new DemoxClient();
+      const record = await resolveSiteFunction(
+        client,
+        options.id,
+        options.slug,
+        accessToken
+      );
+      const env = await client.getFunctionEnv(record.functionId, accessToken);
+      spinner.stop();
+      const keys = Object.keys(env).sort();
+      if (!keys.length) {
+        console.log(chalk.yellow("\n该函数还没有环境变量"));
+        console.log(
+          chalk.gray("运行 demox env set --id <网站ID> --slug <标识> KEY=value\n")
+        );
+        process.exit(0);
+        return;
+      }
+      console.log(chalk.bold(`\n🔐 环境变量 (共 ${keys.length} 个):\n`));
+      for (const key of keys) {
+        console.log(options.keysOnly ? key : `${key}=${env[key]}`);
+      }
+      console.log("");
+      process.exit(0);
+    } catch (error: any) {
+      spinner.fail("获取失败");
+      if (error instanceof AuthError) logger.error("认证失败，请重新登录: demox login");
+      else logger.error(error.message);
+      process.exit(1);
+    }
+  });
+
+envCommand
+  .command("set")
+  .description("设置函数环境变量（与已有变量合并）")
+  .requiredOption("-i, --id <websiteId>", "网站 ID")
+  .requiredOption("-s, --slug <slug>", "函数标识")
+  .option("--from <file>", "从 .env 文件读取")
+  .argument("[pairs...]", "KEY=value")
+  .action(
+    async (
+      pairs: string[],
+      options: { id: string; slug: string; from?: string }
+    ) => {
+      try {
+        const patch = {
+          ...(options.from ? await readEnvFile(options.from) : {}),
+          ...parseEnvAssignments(pairs || []),
+        };
+        if (!Object.keys(patch).length) {
+          logger.error("请提供 KEY=value，或使用 --from .env");
+          process.exit(1);
+          return;
+        }
+        const oauth = new OAuthManager();
+        const accessToken = await oauth.ensureAuthenticated();
+        const client = new DemoxClient();
+        const record = await resolveSiteFunction(
+          client,
+          options.id,
+          options.slug,
+          accessToken
+        );
+        const current = await client.getFunctionEnv(record.functionId, accessToken);
+        const saved = await client.putFunctionEnv(
+          record.functionId,
+          { ...current, ...patch },
+          accessToken
+        );
+        logger.success(
+          `已更新 ${Object.keys(patch).length} 个环境变量，当前共 ${Object.keys(saved).length} 个`
+        );
+        process.exit(0);
+      } catch (error: any) {
+        if (error instanceof AuthError) logger.error("认证失败，请重新登录: demox login");
+        else logger.error(error.message);
+        process.exit(1);
+      }
+    }
+  );
+
+envCommand
+  .command("unset")
+  .description("删除函数环境变量")
+  .requiredOption("-i, --id <websiteId>", "网站 ID")
+  .requiredOption("-s, --slug <slug>", "函数标识")
+  .argument("<keys...>", "要删除的变量名")
+  .action(async (keys: string[], options: { id: string; slug: string }) => {
+    try {
+      const oauth = new OAuthManager();
+      const accessToken = await oauth.ensureAuthenticated();
+      const client = new DemoxClient();
+      const record = await resolveSiteFunction(
+        client,
+        options.id,
+        options.slug,
+        accessToken
+      );
+      const current = await client.getFunctionEnv(record.functionId, accessToken);
+      const next = { ...current };
+      for (const key of keys) delete next[key];
+      await client.putFunctionEnv(record.functionId, next, accessToken);
+      logger.success(`已删除 ${keys.join(", ")}`);
+      process.exit(0);
+    } catch (error: any) {
+      if (error instanceof AuthError) logger.error("认证失败，请重新登录: demox login");
+      else logger.error(error.message);
       process.exit(1);
     }
   });
