@@ -91,6 +91,7 @@ demox update --check
 | `demox test` | 测试服务连接 |
 | `demox clean` | 清理本地缓存 |
 | `demox update` | 检查并安装最新版 CLI；`--check` 仅检查，`--force` 强制重装 |
+| `demox db …` | 管理项目逻辑表（HTTPS API，非 MySQL 协议；见下方） |
 
 ### deploy 选项
 
@@ -106,6 +107,21 @@ demox update --check
 ```
 -f, --force          强制删除，不提示确认
 ```
+
+
+## 项目数据库
+
+每个项目有一份托管的逻辑表（默认约 100MB）。**公网不提供 MySQL 协议**（`db.demox.site:3306` 不可连）；`demox db` 与控制台/API 一样走 HTTPS。
+
+```bash
+demox db tables -p <projectId>
+demox db usage -p <projectId>
+demox db create-table -p <projectId> -n notes -c '[{"name":"id","type":"text","primary":true},{"name":"title","type":"text"}]'
+demox db rows -p <projectId> -t notes
+demox db put -p <projectId> -t notes -v '{"id":"1","title":"hello"}'
+```
+
+鉴权使用 `demox login` 的 Bearer token。详细说明见 demox 仓库 [docs/project-database.md](https://github.com/demox-site/demox/blob/master/docs/project-database.md)。
 
 ## 配置
 
