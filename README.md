@@ -20,7 +20,22 @@ npx @demox-site/cli@latest --help
 demox login
 ```
 
-这会打开浏览器进行 OAuth 授权。
+这会打开浏览器进行 OAuth 授权（authorization code + PKCE S256）。CLI 在本地 `http://localhost:39897/callback` 接收 `code`，再用 `code_verifier` 向 `https://api.demox.site/oauth/token` 换取 access token。
+
+**验证登录是否正常：**
+
+```bash
+# 开发：从本仓库构建后跑
+npm install && npm test
+node dist/cli.js login
+node dist/cli.js status
+
+# 或已安装的全局 CLI（需 ≥ 1.1.9）
+demox login
+demox status
+```
+
+授权页 URL 必须带 `code_challenge`（43 位 base64url）与 `code_challenge_method=S256`；若浏览器提示 `invalid_request` / 缺少 PKCE，说明仍在使用旧版 CLI（npm `@demox-site/cli@1.1.8` 及更早没有这两个参数）。
 
 ### 2. 部署网站
 
