@@ -1,6 +1,6 @@
 {
   "name": "@demox-site/cli",
-  "version": "1.1.8",
+  "version": "1.1.9",
   "description": "Demox CLI - Deploy static sites, cloud functions, and project databases",
   "main": "./dist/index.js",
   "type": "module",

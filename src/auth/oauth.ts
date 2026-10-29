@@ -1,5 +1,5 @@
 /**
- * OAuth 认证管理器
+ * OAuth 认证管理器（authorization code + PKCE S256）
  */
 
 import http from "http";
@@ -8,8 +8,19 @@ import open from "open";
 import { promises as fs } from "fs";
 import { existsSync } from "fs";
 import { dirname } from "path";
+import { randomBytes } from "crypto";
 import { loadConfig, getTokenPath } from "../utils/config.js";
 import { logger } from "../utils/logger.js";
+import { createPkcePair } from "./pkce.js";
+
+export const OAUTH_REDIRECT_URI = "http://localhost:39897/callback";
+export const OAUTH_CALLBACK_PORT = 39897;
+export const OAUTH_DEFAULT_SCOPES = [
+  "website:deploy",
+  "website:list",
+  "website:delete",
+  "website:update",
+] as const;
 
 export interface TokenData {
   accessToken: string;
@@ -18,6 +29,34 @@ export interface TokenData {
   scopes: string[];
   userId: string;
   clientId: string;
+}
+
+export interface AuthorizeUrlOptions {
+  clientId: string;
+  authUrl: string;
+  state: string;
+  codeChallenge: string;
+  scope?: string;
+  redirectUri?: string;
+}
+
+/** Build the browser authorize URL (includes required PKCE S256 params). */
+export function buildAuthorizeUrl(options: AuthorizeUrlOptions): string {
+  const params = new URLSearchParams();
+  params.set("client_id", options.clientId);
+  params.set("redirect_uri", options.redirectUri || OAUTH_REDIRECT_URI);
+  params.set("response_type", "code");
+  params.set("state", options.state);
+  params.set(
+    "scope",
+    options.scope || OAUTH_DEFAULT_SCOPES.join(" ")
+  );
+  params.set("code_challenge", options.codeChallenge);
+  params.set("code_challenge_method", "S256");
+
+  const base = options.authUrl.replace(/\?$/, "");
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}${params.toString()}`;
 }
 
 export class OAuthManager {
@@ -62,20 +101,19 @@ export class OAuthManager {
   }
 
   /**
-   * 启动 OAuth 授权流程
+   * 启动 OAuth 授权流程（authorization code + PKCE）
    */
   async authorize(): Promise<string> {
     logger.info("正在启动登录流程...");
 
     const state = this.generateRandomState();
-    const params = new URLSearchParams();
-    params.set("client_id", this.config.clientId);
-    params.set("redirect_uri", "http://localhost:39897/callback");
-    params.set("response_type", "code");
-    params.set("state", state);
-    params.set("scope", "website:deploy website:list website:delete website:update");
-
-    const authUrl = `${this.config.authUrl}?${params.toString()}`;
+    const { verifier, challenge } = createPkcePair();
+    const authUrl = buildAuthorizeUrl({
+      clientId: this.config.clientId,
+      authUrl: this.config.authUrl,
+      state,
+      codeChallenge: challenge,
+    });
 
     console.log("\n" + "=".repeat(70));
     console.log("🔐 请在浏览器中访问以下 URL 完成登录：");
@@ -93,7 +131,7 @@ export class OAuthManager {
 
     try {
       const tokenData = await Promise.race([
-        this.startLocalServer(state),
+        this.startLocalServer(state, verifier),
         this.createTimeout(300000),
       ]);
 
@@ -110,81 +148,176 @@ export class OAuthManager {
   }
 
   /**
-   * 启动本地 HTTP 服务器接收回调
+   * 用授权码 + code_verifier 向 api.demox.site 换 token
    */
-  private startLocalServer(expectedState: string): Promise<TokenData> {
+  async exchangeAuthorizationCode(
+    code: string,
+    codeVerifier: string,
+    redirectUri: string = OAUTH_REDIRECT_URI
+  ): Promise<TokenData> {
+    const tokenUrl = `${this.config.cloudFunctionUrl}/oauth/token`;
+    const response = await fetch(tokenUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        grant_type: "authorization_code",
+        client_id: this.config.clientId,
+        redirect_uri: redirectUri,
+        code,
+        code_verifier: codeVerifier,
+      }),
+    });
+
+    const text = await response.text();
+    let body: Record<string, unknown> = {};
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      throw new Error(`换取 Token 失败（HTTP ${response.status}）：响应不是 JSON`);
+    }
+
+    if (!response.ok) {
+      const description =
+        (typeof body.error_description === "string" && body.error_description) ||
+        (typeof body.message === "string" && body.message) ||
+        (typeof body.error === "string" && body.error) ||
+        `HTTP ${response.status}`;
+      throw new Error(`换取 Token 失败: ${description}`);
+    }
+
+    const accessToken = body.access_token;
+    if (typeof accessToken !== "string" || !accessToken) {
+      throw new Error("换取 Token 失败: 响应缺少 access_token");
+    }
+
+    const expiresIn =
+      typeof body.expires_in === "number" && body.expires_in > 0
+        ? body.expires_in
+        : 3600;
+    const refreshToken =
+      typeof body.refresh_token === "string" && body.refresh_token
+        ? body.refresh_token
+        : accessToken;
+    const scopes =
+      typeof body.scope === "string" && body.scope.trim()
+        ? body.scope.trim().split(/\s+/).filter(Boolean)
+        : [...OAUTH_DEFAULT_SCOPES];
+    const userId = typeof body.user_id === "string" ? body.user_id : "";
+
+    return {
+      accessToken,
+      refreshToken,
+      expiresAt: Date.now() + expiresIn * 1000,
+      scopes,
+      userId,
+      clientId: this.config.clientId,
+    };
+  }
+
+  /**
+   * 启动本地 HTTP 服务器接收回调。
+   * 优先 authorization code + PKCE；仍兼容旧的 access_token 查询串（若服务端偶发返回）。
+   */
+  private startLocalServer(
+    expectedState: string,
+    codeVerifier: string
+  ): Promise<TokenData> {
     return new Promise((resolve, reject) => {
-      const server = http.createServer((req, res) => {
-        const url = new URL(req.url || "", `http://${req.headers.host}`);
-        const accessToken = url.searchParams.get("access_token");
-        const refreshToken = url.searchParams.get("refresh_token");
-        const userId = url.searchParams.get("user_id");
-        const state = url.searchParams.get("state");
-        const error = url.searchParams.get("error");
-
-        if (error) {
-          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(`
-            <!DOCTYPE html>
-            <html>
-            <head><title>登录取消</title><meta charset="utf-8">
-            <style>body { font-family: sans-serif; text-align: center; padding: 50px; }.error { color: #ef4444; font-size: 24px; }</style>
-            </head>
-            <body><div class="error">❌ 登录取消</div><p>${error}</p><p>您可以关闭此页面。</p></body>
-            </html>
-          `);
+      let settled = false;
+      const finish = (err: Error | null, token?: TokenData) => {
+        if (settled) return;
+        settled = true;
+        try {
           server.close();
-          reject(new Error(`OAuth 授权失败: ${error}`));
-          return;
+        } catch {
+          /* ignore */
         }
+        if (err) reject(err);
+        else resolve(token!);
+      };
 
-        if (accessToken && state) {
-          if (state !== expectedState) {
-            res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-            res.end("State 不匹配");
-            server.close();
-            reject(new Error("OAuth state 不匹配"));
+      const server = http.createServer((req, res) => {
+        void (async () => {
+          const url = new URL(req.url || "", `http://${req.headers.host}`);
+          const code = url.searchParams.get("code");
+          const accessToken = url.searchParams.get("access_token");
+          const refreshToken = url.searchParams.get("refresh_token");
+          const userId = url.searchParams.get("user_id");
+          const state = url.searchParams.get("state");
+          const error = url.searchParams.get("error");
+          const errorDescription = url.searchParams.get("error_description");
+
+          if (error) {
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+            res.end(htmlPage("登录取消", "error", errorDescription || error));
+            finish(new Error(`OAuth 授权失败: ${errorDescription || error}`));
             return;
           }
 
-          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(`
-            <!DOCTYPE html>
-            <html>
-            <head><title>登录成功</title><meta charset="utf-8">
-            <style>body { font-family: sans-serif; text-align: center; padding: 50px; }.success { color: #10b981; font-size: 24px; }</style>
-            </head>
-            <body><div class="success">✅ 登录成功！</div><p>您可以关闭此页面了。</p></body>
-            </html>
-          `);
+          if (!state) {
+            res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+            res.end("缺少 state");
+            finish(new Error("缺少必要的 OAuth 参数"));
+            return;
+          }
 
-          server.close();
+          if (state !== expectedState) {
+            res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+            res.end("State 不匹配");
+            finish(new Error("OAuth state 不匹配"));
+            return;
+          }
 
-          const tokenData: TokenData = {
-            accessToken,
-            refreshToken: refreshToken || accessToken,
-            expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
-            scopes: ["website:deploy", "website:list", "website:delete", "website:update"],
-            userId: userId || "",
-            clientId: this.config.clientId,
-          };
+          // Preferred path: authorization code → token endpoint with PKCE verifier
+          if (code) {
+            try {
+              const tokenData = await this.exchangeAuthorizationCode(
+                code,
+                codeVerifier
+              );
+              res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+              res.end(htmlPage("登录成功！", "success", "您可以关闭此页面了。"));
+              finish(null, tokenData);
+            } catch (exchangeError: any) {
+              const message = exchangeError?.message || "换取 Token 失败";
+              res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+              res.end(htmlPage("登录失败", "error", message));
+              finish(new Error(message));
+            }
+            return;
+          }
 
-          resolve(tokenData);
-        } else {
+          // Legacy compatibility: implicit-style access_token in the query string
+          if (accessToken) {
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+            res.end(htmlPage("登录成功！", "success", "您可以关闭此页面了。"));
+            finish(null, {
+              accessToken,
+              refreshToken: refreshToken || accessToken,
+              expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+              scopes: [...OAUTH_DEFAULT_SCOPES],
+              userId: userId || "",
+              clientId: this.config.clientId,
+            });
+            return;
+          }
+
           res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
           res.end("缺少必要的参数");
-          server.close();
-          reject(new Error("缺少必要的 OAuth 参数"));
-        }
+          finish(new Error("缺少必要的 OAuth 参数"));
+        })();
       });
 
-      server.listen(39897, () => {
-        logger.debug("本地服务器已启动，监听端口 39897");
+      server.on("error", (err) => {
+        finish(err instanceof Error ? err : new Error(String(err)));
+      });
+
+      server.listen(OAUTH_CALLBACK_PORT, () => {
+        logger.debug(`本地服务器已启动，监听端口 ${OAUTH_CALLBACK_PORT}`);
       });
 
       setTimeout(() => {
-        server.close();
-        reject(new Error("登录超时（5 分钟）"));
+        finish(new Error("登录超时（5 分钟）"));
       }, 300000);
     });
   }
@@ -233,11 +366,10 @@ export class OAuthManager {
   }
 
   /**
-   * 生成随机 state
+   * 生成随机 state（auth-api 要求 16–128 位 [A-Za-z0-9._~-]）
    */
   private generateRandomState(): string {
-    return Math.random().toString(36).substring(2, 15) +
-           Math.random().toString(36).substring(2, 15);
+    return randomBytes(24).toString("base64url");
   }
 
   /**
@@ -258,4 +390,25 @@ export class OAuthManager {
     }
     this.currentToken = null;
   }
+}
+
+function htmlPage(
+  title: string,
+  kind: "success" | "error",
+  detail: string
+): string {
+  const color = kind === "success" ? "#10b981" : "#ef4444";
+  const icon = kind === "success" ? "✅" : "❌";
+  const escaped = String(detail)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+  return `<!DOCTYPE html>
+<html>
+<head><title>${title}</title><meta charset="utf-8">
+<style>body { font-family: sans-serif; text-align: center; padding: 50px; }.msg { color: ${color}; font-size: 24px; }</style>
+</head>
+<body><div class="msg">${icon} ${title}</div><p>${escaped}</p></body>
+</html>`;
 }
