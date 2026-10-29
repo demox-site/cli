@@ -1,7 +1,7 @@
 {
   "name": "@demox-site/cli",
-  "version": "1.1.7",
-  "description": "Demox CLI - Deploy static websites and manage project databases",
+  "version": "1.1.8",
+  "description": "Demox CLI - Deploy static sites, cloud functions, and project databases",
   "main": "./dist/index.js",
   "type": "module",
   "bin": {
